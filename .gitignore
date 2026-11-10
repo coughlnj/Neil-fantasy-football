@@ -14,3 +14,12 @@ Thumbs.db
 
 # Large or private raw data (commit small samples only)
 data/raw/
+
+# Python
+__pycache__/
+*.egg-info/
+.pytest_cache/
+.venv/
+
+# Tool output
+out/
