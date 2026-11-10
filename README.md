@@ -89,7 +89,7 @@ Output columns worth knowing:
 
 ## Contests
 
-A contest is a JSON file with `entry_fee`, `entries` and either an explicit `payouts` table (`contests/sample_small_gpp.json`) or `auto` settings that generate a typical top-heavy curve (`contests/typical_gpp.json`: $20 entry, 100,000 entries). `contests/flea_flicker.json` has the real top ten prizes of the $5 Flea Flicker with the lower places estimated by a `tail` block. The other two are illustrative; copy the real payout table from the contest page for real use.
+A contest is a JSON file with `entry_fee`, `entries` and either an explicit `payouts` table (`contests/sample_small_gpp.json`) or `auto` settings that generate a typical top-heavy curve (`contests/typical_gpp.json`: $20 entry, 100,000 entries). `contests/flea_flicker.json` is the real payout table of the $5 Flea Flicker. The other two are illustrative; copy the real payout table from the contest page for real use. If only the top prizes are known, a `tail` block (`to`, `total`, `start`, `min_prize`) estimates the lower places.
 
 ## Other commands
 

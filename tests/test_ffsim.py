@@ -3,7 +3,7 @@ import pandas as pd
 import pytest
 
 from ffsim.candidates import build_candidates
-from ffsim.contest import Contest, generated_payouts, load_contest
+from ffsim.contest import Contest, generated_payouts, load_contest, tail_payouts
 from ffsim.field import field_report, sample_field, target_ownership
 from ffsim.projections import diff_projections, load_projections
 from ffsim.roi import adjust_roi, describe_lineups, evaluate, lineup_scores, pick_portfolio
@@ -127,7 +127,14 @@ def test_flea_flicker_table():
     assert contest.entries == 118000 and len(contest.payouts) == 25250
     assert contest.payouts[:10].tolist() == [100000, 40000, 20000, 10000, 7500, 5000, 2500, 2500, 1500, 1500]
     assert contest.prize_pool == pytest.approx(500000)
-    assert (np.diff(contest.payouts) <= 1e-9).all() and contest.payouts[-1] == pytest.approx(8, abs=0.01)
+    assert (np.diff(contest.payouts) <= 0).all() and contest.payouts[-1] == 8
+    assert contest.payouts[10] == 1000 and contest.payouts[13499] == 10 and contest.payouts[13500] == 8
+
+
+def test_tail_fills_in_missing_places():
+    tail = tail_payouts(11, to=1000, total=30000, start=500, min_prize=8)
+    assert len(tail) == 990 and tail.sum() == pytest.approx(30000)
+    assert tail[0] == pytest.approx(500, rel=0.01) and tail[-1] == pytest.approx(8, abs=0.1)
 
 
 def test_field_is_legal_and_matches_targets(players, settings, field):
