@@ -9,7 +9,7 @@ import pandas as pd
 
 from .candidates import build_candidates
 from .contest import load_contest
-from .field import sample_field, target_ownership
+from .field import field_report, sample_field, target_ownership
 from .projections import diff_projections, load_projections
 from .sample import sample_slate
 from .roi import adjust_roi, describe_lineups, evaluate, pick_portfolio
@@ -79,6 +79,25 @@ def cmd_lineups(args) -> None:
     print(f"\nAll {len(table):,} lineups saved to {args.out}")
 
 
+def cmd_field(args) -> None:
+    settings = load_settings(args.config)
+    players, _ = load_simulation(args.simulation)
+    field, realised = sample_field(players, settings, args.field, args.seed)
+    print(f"How {args.field:,} simulated opponent lineups are built:\n")
+    print(field_report(field, players, settings).to_string(index=False))
+    own = players[["name", "position", "salary"]].copy()
+    own["projected_own_pct"] = (100 * target_ownership(players, settings)).round(1)
+    own["field_own_pct"] = (100 * realised).round(1)
+    own["gap"] = (own["field_own_pct"] - own["projected_own_pct"]).round(1)
+    print("\nLargest ownership gaps (field minus your projection):\n")
+    print(own.reindex(own["gap"].abs().sort_values(ascending=False).index).head(args.show).to_string(index=False))
+    if args.out:
+        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+        names = (players["name"] + " (" + players["team"] + ")").to_numpy()
+        pd.DataFrame(names[field]).to_csv(args.out, index=False, header=False)
+        print(f"\nField lineups saved to {args.out}")
+
+
 def cmd_diff(args) -> None:
     moved = diff_projections(load_projections(args.old), load_projections(args.new), args.min_change)
     if moved.empty:
@@ -108,10 +127,10 @@ def main(argv=None) -> None:
 
     p = sub.add_parser("lineups", help="rank lineups by expected ROI in a contest")
     p.add_argument("simulation", help="simulation.npz written by 'ffsim simulate'")
-    p.add_argument("--contest", required=True)
-    p.add_argument("--candidates", type=int, default=1500, help="lineups to build and grade")
+    p.add_argument("--contest", default="contests/typical_gpp.json")
+    p.add_argument("--candidates", type=int, default=3000, help="lineups to build and grade")
     p.add_argument("--field", type=int, default=20000, help="opponent lineups to sample")
-    p.add_argument("--portfolio", type=int, default=20, help="lineups to select")
+    p.add_argument("--portfolio", type=int, default=150, help="lineups to select")
     p.add_argument("--max-exposure", type=float, default=0.5, help="largest share of the portfolio one player may take")
     p.add_argument("--max-overlap", type=int, default=7, help="most players two portfolio lineups may share")
     p.add_argument("--show", type=int, default=20)
@@ -119,6 +138,15 @@ def main(argv=None) -> None:
     p.add_argument("--config")
     p.add_argument("--seed", type=int)
     p.set_defaults(func=cmd_lineups)
+
+    p = sub.add_parser("field", help="describe the simulated opponent lineups")
+    p.add_argument("simulation")
+    p.add_argument("--field", type=int, default=20000)
+    p.add_argument("--show", type=int, default=10)
+    p.add_argument("--out", help="also save the lineups to this CSV")
+    p.add_argument("--config")
+    p.add_argument("--seed", type=int)
+    p.set_defaults(func=cmd_field)
 
     p = sub.add_parser("diff", help="show whose projection changed between two files")
     p.add_argument("old")

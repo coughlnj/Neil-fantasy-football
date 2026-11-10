@@ -1,0 +1,7 @@
+{
+  "name": "Typical large 150-max tournament (illustrative payouts)",
+  "entry_fee": 20,
+  "entries": 100000,
+  "max_entries": 150,
+  "auto": {"rake": 0.15, "pct_paid": 0.23, "first_place_share": 0.2, "min_cash_multiple": 1.5}
+}

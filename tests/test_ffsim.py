@@ -4,9 +4,9 @@ import pytest
 
 from ffsim.candidates import build_candidates
 from ffsim.contest import Contest, generated_payouts, load_contest
-from ffsim.field import sample_field, target_ownership
+from ffsim.field import field_report, sample_field, target_ownership
 from ffsim.projections import diff_projections, load_projections
-from ffsim.roi import adjust_roi, describe_lineups, evaluate, pick_portfolio
+from ffsim.roi import adjust_roi, describe_lineups, evaluate, lineup_scores, pick_portfolio
 from ffsim.sample import sample_slate
 from ffsim.settings import load_settings
 from ffsim.simulate import load_simulation, save_simulation, simulate_slate
@@ -27,6 +27,11 @@ def players(tmp_path_factory):
 @pytest.fixture(scope="module")
 def sim(players, settings):
     return simulate_slate(players, settings, 20000, seed=1)
+
+
+@pytest.fixture(scope="module")
+def field(players, settings):
+    return sample_field(players, settings, 8000, seed=1)
 
 
 def check_legal(lineups, players, settings, min_salary):
@@ -112,16 +117,24 @@ def test_payouts_add_up_to_the_prize_pool():
 
 
 def test_sample_contests_load():
-    for name in ("sample_large_gpp", "sample_small_gpp"):
+    for name in ("typical_gpp", "sample_small_gpp"):
         contest = load_contest(f"contests/{name}.json")
         assert 0.1 < contest.rake < 0.2
 
 
-def test_field_is_legal_and_matches_ownership(players, settings):
-    field, realised = sample_field(players, settings, 8000, seed=1)
+def test_field_is_legal_and_matches_targets(players, settings, field):
+    field, realised = field
     check_legal(field, players, settings, settings["field"]["min_salary"])
-    assert np.abs(realised - target_ownership(players, settings)).max() < 0.04
+    assert np.abs(realised - target_ownership(players, settings)).max() < 0.08
+    assert np.abs(realised - target_ownership(players, settings)).mean() < 0.005
     assert realised.sum() == pytest.approx(9)
+    report = field_report(field, players, settings).set_index("measure")["value"]
+    assert report[["QB with no pass catcher", "QB with exactly 1 pass catcher", "QB with 2 or more pass catchers"]].sum() == pytest.approx(100, abs=0.2)
+    assert report[["Flex is a RB", "Flex is a WR", "Flex is a TE"]].sum() == pytest.approx(100, abs=0.2)
+    assert report["QB with no pass catcher"] == pytest.approx(17, abs=0.5)
+    assert report["QB with 2 or more pass catchers"] == pytest.approx(38, abs=0.5)
+    assert report["Stacks that add an opposing pass catcher"] == pytest.approx(40, abs=1)
+    assert report["Median salary used"] >= 49500 and report["Defense facing its own QB"] < 5
 
 
 def test_field_survives_ownership_it_cannot_match(players, settings):
@@ -144,9 +157,9 @@ def test_candidates_are_legal_stacked_and_distinct(players, sim, settings):
     assert described["QB"].str.contains("QB1").all() and described["DST"].str.contains("DST").all()
 
 
-def test_field_lineups_lose_the_rake(players, sim, settings):
+def test_field_lineups_lose_the_rake(players, sim, field):
     """Lineups drawn like the field should, on average, earn back prizes minus rake."""
-    field, _ = sample_field(players, settings, 6000, seed=2)
+    field = field[0]
     contest = Contest("t", 20, 20000, generated_payouts(20, 20000))
     results = evaluate(field[:1500], field[1500:], sim[0], contest)
     assert results["roi_pct"].mean() == pytest.approx(-100 * contest.rake, abs=6)
@@ -157,13 +170,16 @@ def test_field_lineups_lose_the_rake(players, sim, settings):
     assert adjusted.std() < results["roi_pct"].std()
 
 
-def test_duplicated_lineup_splits_its_prize(players, sim, settings):
-    field, _ = sample_field(players, settings, 999, seed=2)
-    contest = Contest("t", 10, 1000, np.array([5000.0]))
-    solo = evaluate(field[:1], field[1:], sim[0][:, :2000], contest)
-    shared = evaluate(field[:1], np.vstack([field[1:], field[:1]]), sim[0][:, :2000], contest)
-    assert shared["expected_dupes"][0] == pytest.approx(1, abs=0.01)
-    assert shared["roi_pct"][0] + 100 == pytest.approx((solo["roi_pct"][0] + 100) / 2, rel=0.05)
+def test_duplicated_lineup_splits_its_prize(sim, field):
+    pool = np.unique(field[0], axis=0)[:51]
+    best = lineup_scores(pool, sim[0][:, :500]).mean(axis=1).argmax()
+    mine, others = pool[best : best + 1], np.delete(pool, best, axis=0)
+    contest = Contest("t", 10, 51, np.array([500.0]))
+    solo = evaluate(mine, others, sim[0], contest)
+    shared = evaluate(mine, np.vstack([others[1:], mine]), sim[0], contest)
+    assert solo["win_pct"][0] > 2 and solo["expected_dupes"][0] == 0
+    assert shared["expected_dupes"][0] == pytest.approx(1, abs=0.03)
+    assert shared["roi_pct"][0] + 100 == pytest.approx((solo["roi_pct"][0] + 100) / 2, rel=0.1)
 
 
 def test_portfolio_respects_limits():

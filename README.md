@@ -16,10 +16,11 @@ pip install -e ".[dev]"
 ```
 ffsim sample-slate data/sample/projections.csv
 ffsim simulate data/sample/projections.csv
-ffsim lineups out/simulation.npz --contest contests/sample_large_gpp.json
+ffsim field out/simulation.npz
+ffsim lineups out/simulation.npz
 ```
 
-The last step takes about a minute and writes every graded lineup to `out/lineups.csv`.
+`ffsim lineups` takes about 90 seconds. It prints a 150-lineup portfolio and writes every graded lineup to `out/lineups.csv`. Without `--contest` it uses `contests/typical_gpp.json`.
 
 ## Projections file
 
@@ -47,10 +48,29 @@ This simulates fantasy scores with game structure. It is not a play-by-play simu
 
 ## How the lineup analyzer works
 
-- **Opponents:** samples a field of lineups (20,000 by default) whose player ownership matches the projections, with quarterback stacks and salary use like real entries.
-- **Candidates:** an optimizer builds lineups (1,500 by default), each the best lineup for a blend of the mean projections and one simulated slate. Those slates are held out and never used for grading.
+- **Opponents:** samples a field of lineups (20,000 by default). See "The opponent field" below.
+- **Candidates:** an optimizer builds lineups (3,000 by default), each the best lineup for a blend of the mean projections and one simulated slate. Those slates are held out and never used for grading.
 - **Grading:** in every remaining simulated slate each candidate is ranked against the field and paid from the contest's payout table. Duplicated lineups split prizes.
-- **Portfolio:** picks the top lineups subject to a per-player exposure cap and a limit on shared players.
+- **Portfolio:** picks the top lineups (150 by default) subject to a per-player exposure cap and a limit on shared players.
+
+### The opponent field
+
+ROI is only as good as the simulated opponents, so the field is built to hit explicit targets, all in the `field` section of `src/ffsim/settings.py`:
+
+| Target                         | Default                                         |
+|--------------------------------|-------------------------------------------------|
+| Player ownership               | Your projected ownership                        |
+| QB with no / one / two-plus of their own WRs and TEs | 17% / 45% / 38%           |
+| Stacks that add an opposing WR or TE | 40%                                       |
+| Flex split between RB, WR, TE  | Implied by your ownership totals per position   |
+| Median salary used             | $49,700 (none below $48,000)                    |
+| Defense facing the lineup's own QB | Rare                                        |
+
+`ffsim field out/simulation.npz` prints what the sampled field actually looks like on each of these, plus the players whose field ownership is furthest from your projection. Add `--out out/field.csv` to save the lineups.
+
+The stacking and salary defaults are estimates for large tournaments, not measured from contest data. Ownership and stacking targets can conflict (a 30%-owned quarterback forces ownership onto their receivers); when they do, the stack mix wins and the report shows the ownership gap.
+
+Known gaps: the field has no notion of sharper and weaker entrants, of one entrant's 150 correlated lineups, or of late-swap. It also produces almost no duplicated lineups, where real large fields duplicate popular builds.
 
 Output columns worth knowing:
 
@@ -69,7 +89,7 @@ Output columns worth knowing:
 
 ## Contests
 
-A contest is a JSON file with `entry_fee`, `entries` and either an explicit `payouts` table (`contests/sample_small_gpp.json`) or `auto` settings that generate a typical top-heavy curve (`contests/sample_large_gpp.json`). The two samples are illustrative; copy the real payout table from the contest page for real use.
+A contest is a JSON file with `entry_fee`, `entries` and either an explicit `payouts` table (`contests/sample_small_gpp.json`) or `auto` settings that generate a typical top-heavy curve (`contests/typical_gpp.json`: $20 entry, 100,000 entries). Both are illustrative; copy the real payout table from the contest page for real use.
 
 ## Other commands
 
@@ -84,6 +104,7 @@ pytest
 
 ## Not built yet
 
+- Checking the field against real contest results (DraftKings lets entrants download a contest's standings, which list every lineup).
 - Fetching projections on a schedule and reporting changes automatically.
 - A DraftKings upload file (needs DraftKings player IDs).
 - Showdown slates and FanDuel.

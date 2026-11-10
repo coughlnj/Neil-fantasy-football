@@ -1,6 +1,0 @@
-{
-  "name": "Sample large tournament (illustrative payouts)",
-  "entry_fee": 20,
-  "entries": 50000,
-  "auto": {"rake": 0.15, "pct_paid": 0.22, "first_place_share": 0.15, "min_cash_multiple": 2.0}
-}

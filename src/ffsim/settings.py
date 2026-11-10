@@ -44,13 +44,17 @@ DEFAULTS: dict = {
     },
     # How opponents build lineups.
     "field": {
-        "min_salary": 48800,
-        "stack_boost": 5.0,       # extra weight on the QB's own WRs/TEs
-        "bringback_boost": 1.4,   # extra weight on the opposing WRs/TEs
+        "min_salary": 48000,
+        "median_salary": 49700,
+        # Share of opponent lineups by how many WRs/TEs share a team with the QB, and
+        # the share of stacks that also use an opposing WR/TE. Approximate figures for
+        # large tournaments; compare with `ffsim field` and adjust.
+        "stack_mix": {"none": 0.17, "single": 0.45, "double": 0.38},
+        "bringback_rate": 0.40,
         "dst_vs_qb_penalty": 0.05,  # weight multiplier for a DST facing the lineup's QB
         "flex_weight": {"RB": 1.0, "WR": 1.0, "TE": 0.35},
         "calibration_rounds": 8,
-        "calibration_lineups": 15000,
+        "calibration_lineups": 8000,
     },
     # How candidate lineups are built.
     "candidates": {
