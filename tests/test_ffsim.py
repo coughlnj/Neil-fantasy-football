@@ -2,11 +2,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from ffsim.candidates import build_candidates
+from ffsim.candidates import build_candidates, search_candidates
 from ffsim.contest import Contest, generated_payouts, load_contest, tail_payouts
 from ffsim.field import field_report, sample_field, target_ownership
 from ffsim.projections import diff_projections, load_projections
-from ffsim.roi import adjust_roi, describe_lineups, evaluate, lineup_scores, pick_portfolio
+from ffsim.roi import (adjust_roi, describe_lineups, evaluate, lineup_scores, pick_portfolio,
+                       pick_portfolio_for_growth, portfolio_summary)
 from ffsim.sample import sample_slate
 from ffsim.settings import load_settings
 from ffsim.simulate import load_simulation, save_simulation, simulate_slate
@@ -195,6 +196,48 @@ def test_duplicated_lineup_splits_its_prize(sim, field):
     assert solo["win_pct"][0] > 2 and solo["expected_dupes"][0] == 0
     assert shared["expected_dupes"][0] == pytest.approx(1, abs=0.03)
     assert shared["roi_pct"][0] + 100 == pytest.approx((solo["roi_pct"][0] + 100) / 2, rel=0.1)
+
+
+def test_wide_search_finds_better_lineups_than_it_started_with(players, sim, settings, field):
+    contest = Contest("t", 20, 20000, generated_payouts(20, 20000))
+    build, grade = sim[0][:, -4000:], sim[0][:, :6000]
+    only_optimizer = search_candidates(players, build, field[0], contest, settings, 30, 0, 0, seed=1)
+    found = search_candidates(players, build, field[0], contest, settings, 30, 6000, 200, seed=1)
+    check_legal(found, players, settings, settings["candidates"]["min_salary"])
+    assert len(only_optimizer) <= 30 < len(found) <= 230
+    assert len(np.unique(found, axis=0)) == len(found)
+    results, payouts = evaluate(found, field[0], grade, contest, keep_payouts=True)
+    assert payouts.shape == (len(found), 6000)
+    assert payouts.mean(axis=1) / 20 - 1 == pytest.approx(results["roi_pct"] / 100, abs=1e-4)
+    # Graded on slates the search never saw, the field as a whole loses the rake.
+    assert results["roi_pct"].mean() > -100 * contest.rake
+
+
+def test_growth_portfolio_spreads_across_outcomes():
+    # A and B win in the same slates; C wins in different ones and is slightly worse.
+    payouts = np.zeros((3, 100), dtype=np.float32)
+    payouts[0, :10] = 1000
+    payouts[1, :10] = 990
+    payouts[2, 50:60] = 900
+    lineups = np.array([[0, 1, 2], [3, 4, 5], [6, 7, 8]])
+    roi = 100 * (payouts.mean(axis=1) / 10 - 1)
+    pick = lambda bankroll: sorted(pick_portfolio_for_growth(lineups, payouts, roi, 10, 2, bankroll, 1.0, 9))
+    assert pick(200) == [0, 2]
+    assert pick(10_000_000) == [0, 1]
+    together = portfolio_summary(payouts[[0, 1]], roi[[0, 1]], 10)
+    spread = portfolio_summary(payouts[[0, 2]], roi[[0, 2]], 10)
+    assert spread["profit_chance_pct"] == 20 and together["profit_chance_pct"] == 10
+
+
+def test_growth_portfolio_respects_limits():
+    rng = np.random.default_rng(0)
+    lineups = np.array([rng.choice(30, 9, replace=False) for _ in range(200)])
+    payouts = rng.exponential(5, size=(200, 300)).astype(np.float32)
+    roi = 100 * (payouts.mean(axis=1) / 5 - 1)
+    chosen = pick_portfolio_for_growth(lineups, payouts, roi, 5, 20, 2000, 0.5, 6)
+    assert len(set(chosen)) == len(chosen) <= 20
+    assert np.bincount(lineups[chosen].ravel()).max() <= 10
+    assert all(len(np.intersect1d(lineups[a], lineups[b])) <= 6 for a in chosen for b in chosen if a != b)
 
 
 def test_portfolio_respects_limits():

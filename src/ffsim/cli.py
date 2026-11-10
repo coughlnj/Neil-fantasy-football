@@ -7,12 +7,13 @@ import os
 import numpy as np
 import pandas as pd
 
-from .candidates import build_candidates
+from .candidates import search_candidates
 from .contest import load_contest
 from .field import field_report, sample_field, target_ownership
 from .projections import diff_projections, load_projections
 from .sample import sample_slate
-from .roi import adjust_roi, describe_lineups, evaluate, pick_portfolio
+from .roi import (adjust_roi, describe_lineups, evaluate, pick_portfolio, pick_portfolio_for_growth,
+                  portfolio_summary)
 from .settings import load_settings
 from .simulate import fit_report, load_simulation, save_simulation, simulate_slate
 
@@ -41,7 +42,9 @@ def cmd_lineups(args) -> None:
     players, scores = load_simulation(args.simulation)
     contest = load_contest(args.contest)
     n_sims = scores.shape[1]
-    held_out = max(1, min(args.candidates, n_sims // 5))
+    held_out = max(settings["candidates"]["screen_sims"], n_sims // 5)
+    if held_out >= n_sims:
+        raise SystemExit("Too few simulations; rerun 'ffsim simulate' with more --sims.")
     grade, build = scores[:, : n_sims - held_out], scores[:, n_sims - held_out :]
 
     print(f"{contest.name}: ${contest.entry_fee:g} entry, {contest.entries:,} entries, "
@@ -56,27 +59,55 @@ def cmd_lineups(args) -> None:
     print(f"Sampled {field_size:,} opponent lineups; ownership within "
           f"{100 * np.abs(realised - target).max():.1f} points of your projections.")
 
-    candidates = build_candidates(players, build, settings, args.candidates, args.seed)
-    print(f"Built {len(candidates):,} candidate lineups; grading over {grade.shape[1]:,} simulated slates...")
+    candidates = search_candidates(
+        players, build, field, contest, settings, args.optimizer_lineups, args.sampled, args.candidates,
+        args.seed, log=print,
+    )
+    print(f"Grading {len(candidates):,} lineups over {grade.shape[1]:,} simulated slates...")
     results = evaluate(candidates, field, grade, contest)
-
     table = describe_lineups(candidates, players, realised)
     adjusted = adjust_roi(results, table[["projection", "total_ownership_pct"]])
     table["adj_roi_pct"] = adjusted.round(2)
     table = pd.concat([table, results.round(3)], axis=1)
-    chosen = pick_portfolio(candidates, adjusted, args.portfolio, args.max_exposure, args.max_overlap)
+
+    # Choose the portfolio from the strongest lineups, judged together.
+    finalists = np.argsort(-adjusted)[: max(args.finalists, args.portfolio)]
+    _, payouts = evaluate(candidates[finalists], field, grade, contest, keep_payouts=True)
+    limits = (args.portfolio, args.max_exposure, args.max_overlap)
+    simple = pick_portfolio(candidates[finalists], adjusted[finalists], *limits)
+    bankroll = args.bankroll if args.bankroll is not None else 20 * args.portfolio * contest.entry_fee
+    if bankroll > 0:
+        chosen = pick_portfolio_for_growth(
+            candidates[finalists], payouts, adjusted[finalists], contest.entry_fee, args.portfolio, bankroll,
+            args.max_exposure, args.max_overlap,
+        )
+    else:
+        chosen = simple
     table["in_portfolio"] = False
-    table.loc[chosen, "in_portfolio"] = True
+    table.loc[finalists[chosen], "in_portfolio"] = True
     table = table.sort_values("adj_roi_pct", ascending=False).reset_index(drop=True)
 
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     table.to_csv(args.out, index=False)
     picked = table[table["in_portfolio"]]
-    print(f"\nPortfolio of {len(picked)} lineups: average adjusted ROI {picked['adj_roi_pct'].mean():+.1f}% "
-          f"(all candidates average {table['roi_pct'].mean():+.1f}%)")
-    with pd.option_context("display.width", 250, "display.max_columns", None):
-        print(picked.head(args.show).drop(columns=["in_portfolio"]).to_string(index=False))
-    print(f"\nAll {len(table):,} lineups saved to {args.out}")
+    picked.drop(columns=["in_portfolio"]).to_csv(args.portfolio_out, index=False)
+
+    compare = pd.DataFrame(
+        {
+            "chosen as a set": portfolio_summary(payouts[chosen], adjusted[finalists][chosen], contest.entry_fee),
+            "top lineups one by one": portfolio_summary(payouts[simple], adjusted[finalists][simple], contest.entry_fee),
+        }
+    ).T
+    if bankroll > 0:
+        print(f"\nPortfolio chosen for a ${bankroll:,.0f} bankroll, compared with simply taking the top lineups:\n")
+        print(compare.to_string())
+    else:
+        print("\nPortfolio (top lineups one by one):\n")
+        print(compare.iloc[[1]].to_string())
+    if args.show:
+        with pd.option_context("display.width", 250, "display.max_columns", None):
+            print("\n" + picked.head(args.show).drop(columns=["in_portfolio"]).to_string(index=False))
+    print(f"\nPortfolio saved to {args.portfolio_out}; all {len(table):,} graded lineups to {args.out}")
 
 
 def cmd_field(args) -> None:
@@ -128,13 +159,19 @@ def main(argv=None) -> None:
     p = sub.add_parser("lineups", help="rank lineups by expected ROI in a contest")
     p.add_argument("simulation", help="simulation.npz written by 'ffsim simulate'")
     p.add_argument("--contest", default="contests/flea_flicker.json")
-    p.add_argument("--candidates", type=int, default=3000, help="lineups to build and grade")
+    p.add_argument("--candidates", type=int, default=5000, help="sampled lineups to keep for full grading")
+    p.add_argument("--sampled", type=int, default=200000, help="lineups to sample and screen")
+    p.add_argument("--optimizer-lineups", type=int, default=600, help="lineups to build with the optimizer")
+    p.add_argument("--finalists", type=int, default=2000, help="top lineups the portfolio is chosen from")
     p.add_argument("--field", type=int, default=20000, help="opponent lineups to sample")
     p.add_argument("--portfolio", type=int, default=150, help="lineups to select")
+    p.add_argument("--bankroll", type=float,
+                   help="bankroll in dollars the portfolio is sized for (default 20x the entry cost; 0 ignores risk)")
     p.add_argument("--max-exposure", type=float, default=0.5, help="largest share of the portfolio one player may take")
     p.add_argument("--max-overlap", type=int, default=7, help="most players two portfolio lineups may share")
-    p.add_argument("--show", type=int, default=20)
+    p.add_argument("--show", type=int, default=10)
     p.add_argument("--out", default="out/lineups.csv")
+    p.add_argument("--portfolio-out", default="out/portfolio.csv")
     p.add_argument("--config")
     p.add_argument("--seed", type=int)
     p.set_defaults(func=cmd_lineups)

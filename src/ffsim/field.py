@@ -12,8 +12,8 @@ class LineupSampler:
     defense facing that quarterback, and must land inside a salary window.
     """
 
-    def __init__(self, players: pd.DataFrame, settings: dict):
-        self.cfg = settings["field"]
+    def __init__(self, players: pd.DataFrame, settings: dict, cfg: dict | None = None):
+        self.cfg = cfg or settings["field"]
         self.cap = settings["site"]["salary_cap"]
         self.salary = players["salary"].to_numpy(float)
         teams = {t: i for i, t in enumerate(sorted(set(players["team"]) | set(players["opponent"])))}
@@ -72,7 +72,8 @@ class LineupSampler:
         picks.append(np.stack(flex_ids, axis=1)[np.arange(batch), best][:, None])
 
         dst_idx = self.idx["DST"]
-        k = keys("DST") + np.log(self.cfg["dst_vs_qb_penalty"]) * (self.opp[dst_idx][None, :] == q_team)
+        penalty = np.log(max(self.cfg["dst_vs_qb_penalty"], 1e-12))
+        k = keys("DST") + np.where(self.opp[dst_idx][None, :] == q_team, penalty, 0.0)
         picks.append(dst_idx[k.argmax(axis=1)][:, None])
 
         lineups = np.concatenate(picks, axis=1)
@@ -95,11 +96,12 @@ class LineupSampler:
 
     def sample(self, logw: np.ndarray, n: int, rng: np.random.Generator) -> np.ndarray:
         """Return n lineups as sorted player indices, shape (n, 9), with stack types in
-        the configured proportions. Lineups that leave salary unspent are kept less
-        often, so the median lineup costs about field.median_salary."""
+        the configured proportions. When a median salary is configured, lineups that
+        leave salary unspent are kept less often so the median lineup costs about that."""
         need = np.floor(self.class_target * n).astype(int)
         need[np.argmax(self.class_target)] += n - need.sum()
-        fade = max(self.cap - self.cfg["median_salary"], 1.0) / np.log(2)
+        median = self.cfg.get("median_salary")
+        fade = max(self.cap - median, 1.0) / np.log(2) if median else np.inf
         found = []
         for _ in range(300):
             if need.sum() == 0:

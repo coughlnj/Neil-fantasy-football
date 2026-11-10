@@ -62,6 +62,15 @@ DEFAULTS: dict = {
         "min_stack": 1,            # pass catchers required alongside the QB
         "allow_dst_vs_qb": False,
         "blend_range": [0.25, 0.75],  # weight on a simulated slate vs the mean projection
+        # The wide search: lineups are sampled around the players the optimizer favours,
+        # screened on a few simulations against part of the field, then re-sampled
+        # around the survivors.
+        "search_rounds": 2,
+        "screen_sims": 1000,
+        "screen_field": 5000,
+        "stack_mix": {"none": 0.03, "single": 0.42, "double": 0.55},
+        "bringback_rate": 0.5,
+        "flex_weight": {"RB": 1.0, "WR": 1.0, "TE": 0.35},
     },
 }
 

@@ -17,9 +17,11 @@ def lineup_scores(lineups: np.ndarray, scores: np.ndarray) -> np.ndarray:
 
 
 def evaluate(
-    candidates: np.ndarray, field: np.ndarray, scores: np.ndarray, contest: Contest, chunk: int = 200
-) -> pd.DataFrame:
-    """Expected ROI and finish rates for each candidate, over every simulated slate."""
+    candidates: np.ndarray, field: np.ndarray, scores: np.ndarray, contest: Contest, chunk: int = 200,
+    keep_payouts: bool = False,
+):
+    """Expected ROI and finish rates for each candidate, over every simulated slate.
+    With keep_payouts, also returns every candidate's prize in every slate."""
     n_field, n_sims = len(field), scores.shape[1]
     scale = (contest.entries - 1) / (n_field + 1)
     paid = len(contest.payouts)
@@ -30,6 +32,7 @@ def evaluate(
     top01 = np.zeros(len(candidates))
     cashes = np.zeros(len(candidates))
     dupes = np.zeros(len(candidates))
+    payouts = np.zeros((len(candidates), n_sims), dtype=np.float32) if keep_payouts else None
 
     for start in range(0, n_sims, chunk):
         block = scores[:, start : start + chunk]
@@ -42,6 +45,8 @@ def evaluate(
             prize = contest.expected_payout(above, tied, n_field)
             rank = (above + 0.5) * scale + 1
             total += prize
+            if keep_payouts:
+                payouts[:, start + col] = prize
             total_sq += prize**2
             wins += (above == 0) / np.maximum((tied + 1) * scale, 1.0)
             top1 += rank <= 0.01 * contest.entries
@@ -52,7 +57,7 @@ def evaluate(
 
     mean_prize = total / n_sims
     variance = np.maximum(total_sq / n_sims - mean_prize**2, 0)
-    return pd.DataFrame(
+    results = pd.DataFrame(
         {
             "roi_pct": 100 * (mean_prize / contest.entry_fee - 1),
             "roi_se_pct": 100 * np.sqrt(variance / n_sims) / contest.entry_fee,
@@ -63,6 +68,7 @@ def evaluate(
             "expected_dupes": dupes,
         }
     )
+    return (results, payouts) if keep_payouts else results
 
 
 def adjust_roi(results: pd.DataFrame, extra: pd.DataFrame | None = None) -> np.ndarray:
@@ -121,3 +127,72 @@ def pick_portfolio(lineups: np.ndarray, roi: np.ndarray, n: int, max_exposure: f
         for p in lineups[i]:
             counts[p] = counts.get(p, 0) + 1
     return np.array(chosen, dtype=int)
+
+
+def pick_portfolio_for_growth(
+    lineups: np.ndarray,
+    payouts: np.ndarray,
+    roi_pct: np.ndarray,
+    entry_fee: float,
+    n: int,
+    bankroll: float,
+    max_exposure: float,
+    max_overlap: int,
+) -> np.ndarray:
+    """Choose lineups as a set, to maximise the expected growth of a bankroll.
+
+    Expected winnings simply add up across lineups, so judging lineups one at a time
+    cannot tell a diversified set from one that wins or loses all together. Growth of a
+    bankroll (log utility) can: each lineup is valued by what it adds in the slates
+    where the lineups already chosen are not winning. A larger bankroll moves the choice
+    toward plain expected value.
+
+    payouts: each lineup's prize in each simulated slate. They are rescaled so each
+    lineup's average matches roi_pct, the steadier estimate.
+    """
+    raw = payouts.mean(axis=1)
+    target = entry_fee * (1 + roi_pct / 100)
+    factor = np.clip(np.divide(target, raw, out=np.ones_like(target), where=raw > 0), 0.2, 3.0)
+    prizes = payouts * factor[:, None].astype(np.float32)
+    base = max(bankroll - n * entry_fee, n * entry_fee)
+    winnings = np.zeros(payouts.shape[1], dtype=np.float32)
+
+    limit = max(1, int(np.floor(max_exposure * n + 1e-9)))
+    membership = np.zeros((len(lineups), lineups.max() + 1), dtype=np.int16)
+    membership[np.arange(len(lineups))[:, None], lineups] = 1
+    counts = np.zeros(membership.shape[1], dtype=int)
+    eligible = np.ones(len(lineups), dtype=bool)
+
+    def gain(i) -> float:
+        return float(np.log1p(prizes[i] / (base + winnings)).mean())
+
+    # Gains only shrink as winnings build up, so a stale gain is an upper bound and
+    # only the current leader needs recomputing.
+    bound = np.log1p(prizes / base).mean(axis=1)
+    chosen: list[int] = []
+    while len(chosen) < n and eligible.any():
+        i = int(np.argmax(np.where(eligible, bound, -np.inf)))
+        bound[i] = gain(i)
+        if bound[i] < np.where(eligible, bound, -np.inf).max():
+            continue
+        chosen.append(i)
+        winnings += prizes[i]
+        counts += membership[i]
+        eligible[i] = False
+        eligible &= (membership @ membership[i]) <= max_overlap
+        eligible &= ~(membership[:, counts >= limit].any(axis=1))
+    return np.array(chosen, dtype=int)
+
+
+def portfolio_summary(payouts: np.ndarray, roi_pct: np.ndarray, entry_fee: float) -> dict:
+    """How a set of lineups performs together across the simulated slates."""
+    cost = entry_fee * len(payouts)
+    total = payouts.sum(axis=0)
+    return {
+        "lineups": len(payouts),
+        "expected_roi_pct": round(float(roi_pct.mean()), 1),
+        "profit_chance_pct": round(100 * float((total > cost).mean()), 1),
+        "median_return_pct": round(100 * float(np.median(total) / cost - 1), 1),
+        "chance_of_5x_pct": round(100 * float((total >= 5 * cost).mean()), 2),
+        "chance_of_losing_half_pct": round(100 * float((total < 0.5 * cost).mean()), 1),
+    }

@@ -20,7 +20,7 @@ ffsim field out/simulation.npz
 ffsim lineups out/simulation.npz
 ```
 
-`ffsim lineups` takes about 90 seconds. It prints a 150-lineup portfolio and writes every graded lineup to `out/lineups.csv`. Without `--contest` it uses `contests/flea_flicker.json`.
+`ffsim lineups` takes a little over two minutes. It writes the 150-lineup portfolio to `out/portfolio.csv` and every graded lineup to `out/lineups.csv`. Without `--contest` it uses `contests/flea_flicker.json`.
 
 ## Projections file
 
@@ -49,9 +49,18 @@ This simulates fantasy scores with game structure. It is not a play-by-play simu
 ## How the lineup analyzer works
 
 - **Opponents:** samples a field of lineups (20,000 by default). See "The opponent field" below.
-- **Candidates:** an optimizer builds lineups (3,000 by default), each the best lineup for a blend of the mean projections and one simulated slate. Those slates are held out and never used for grading.
-- **Grading:** in every remaining simulated slate each candidate is ranked against the field and paid from the contest's payout table. Duplicated lineups split prizes.
-- **Portfolio:** picks the top lineups (150 by default) subject to a per-player exposure cap and a limit on shared players.
+- **Candidates:** a wide search. An optimizer builds a few hundred lineups, each the best for a blend of the mean projections and one simulated slate. Then 200,000 lineups are sampled around the players those lineups favour, screened against part of the field, and re-sampled around the survivors. The best 5,000 go on to full grading.
+- **Grading:** in every simulated slate each candidate is ranked against the field and paid from the contest's payout table. Duplicated lineups split prizes. Grading uses slates the search never saw, so a lineup is never graded on a slate it was built or screened on.
+- **Portfolio:** 150 lineups chosen as a set from the top 2,000 (see "Choosing the portfolio"), subject to a per-player exposure cap and a limit on shared players. Saved to `out/portfolio.csv`.
+
+### Choosing the portfolio
+
+Expected winnings add up across lineups, so taking the top lineups one by one always has the highest expected ROI. It also tends to pick lineups that win or lose together. By default the portfolio is instead chosen to maximise the expected growth of a bankroll: each lineup is valued by what it adds in the slates where the lineups already chosen are not winning.
+
+- `--bankroll DOLLARS` sets the bankroll (default: 20 times the cost of the entries). A smaller bankroll buys more diversification at the cost of expected ROI; a larger one moves toward the plain top lineups.
+- `--bankroll 0` takes the top lineups one by one.
+
+Each run prints both versions side by side: expected ROI, chance of profit, median return, chance of a 5x return, and chance of losing half the entry cost.
 
 ### The opponent field
 

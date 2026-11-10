@@ -5,6 +5,10 @@ import numpy as np
 import pandas as pd
 from scipy.optimize import Bounds, LinearConstraint, milp
 
+from .contest import Contest
+from .field import LineupSampler
+from .roi import adjust_roi, evaluate
+
 
 class LineupOptimizer:
     """Finds the highest-scoring legal DraftKings classic lineup for a set of player values."""
@@ -70,3 +74,55 @@ def build_candidates(
         if lineup is not None:
             found.add(tuple(lineup))
     return np.array(sorted(found))
+
+
+def search_candidates(
+    players: pd.DataFrame,
+    scores: np.ndarray,
+    field: np.ndarray,
+    contest: Contest,
+    settings: dict,
+    n_optimizer: int,
+    n_sampled: int,
+    n_keep: int,
+    seed: int | None = None,
+    log=lambda message: None,
+) -> np.ndarray:
+    """A wide search for strong lineups. Returns distinct lineups: the optimizer's, plus
+    the best n_keep of n_sampled lineups sampled around the players that good lineups use.
+
+    `scores` must be simulations kept apart from the ones used for final grading: they
+    drive the optimizer and the screening here.
+    """
+    cfg = settings["candidates"]
+    rng = np.random.default_rng(seed)
+    optimal = build_candidates(players, scores, settings, n_optimizer, seed)
+    log(f"Optimizer built {len(optimal):,} lineups.")
+    if n_sampled <= 0 or n_keep <= 0:
+        return optimal
+
+    sampler_cfg = {
+        "min_salary": cfg["min_salary"], "median_salary": None,
+        "stack_mix": cfg["stack_mix"], "bringback_rate": cfg["bringback_rate"],
+        "flex_weight": cfg["flex_weight"],
+        "dst_vs_qb_penalty": 1.0 if cfg["allow_dst_vs_qb"] else 0.0,
+    }
+    sampler = LineupSampler(players, settings, sampler_cfg)
+    screen_scores = scores[:, : cfg["screen_sims"]]
+    screen_field = field[: cfg["screen_field"]]
+    rounds = max(1, cfg["search_rounds"])
+    best, best_value, favoured = np.empty((0, optimal.shape[1]), dtype=int), np.empty(0), optimal
+    for number in range(rounds):
+        usage = np.bincount(favoured.ravel(), minlength=len(players)) / len(favoured)
+        logw = np.log(usage + 0.002)
+        drawn = sampler.sample(sampler.salary_tilt(logw, rng), n_sampled // rounds, rng)
+        drawn = np.unique(drawn, axis=0)
+        value = adjust_roi(evaluate(drawn, screen_field, screen_scores, contest))
+        lineups, first = np.unique(np.vstack([best, drawn]), axis=0, return_index=True)
+        value = np.concatenate([best_value, value])[first]
+        top = np.argsort(-value)[:n_keep]
+        best, best_value = lineups[top], value[top]
+        favoured = best
+        log(f"Search round {number + 1}: screened {len(drawn):,} sampled lineups, "
+            f"best {len(best):,} average {best_value.mean():+.0f}% on the screen.")
+    return np.unique(np.vstack([optimal, best]), axis=0)
