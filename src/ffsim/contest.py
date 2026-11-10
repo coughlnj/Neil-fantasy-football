@@ -45,6 +45,8 @@ def load_contest(path: str) -> Contest:
         prizes: list[float] = []
         for tier in spec["payouts"]:
             prizes += [float(tier["prize"])] * (int(tier["to"]) - int(tier["from"]) + 1)
+        if "tail" in spec:
+            prizes += list(tail_payouts(len(prizes) + 1, **spec["tail"]))
         payouts = np.array(prizes)
     else:
         payouts = generated_payouts(fee, entries, **spec.get("auto", {}))
@@ -77,3 +79,21 @@ def generated_payouts(
         lo, hi = (mid, hi) if curve(mid).sum() > pool else (lo, mid)
     payouts = curve(hi)
     return payouts * (pool / payouts.sum())
+
+
+def tail_payouts(first_place: int, to: int, total: float, start: float, min_prize: float) -> np.ndarray:
+    """Fill in the places below a known top of the table: prizes fall smoothly from
+    `start` to `min_prize` through place `to`, adding up to `total`."""
+    ranks = np.arange(first_place, to + 1) / first_place
+    if not min_prize * len(ranks) <= total <= start * len(ranks):
+        raise ValueError("tail total is not reachable with these start and minimum prizes")
+
+    def curve(decay: float) -> np.ndarray:
+        return np.maximum(start * ranks ** (-decay), min_prize)
+
+    lo, hi = 0.0, 20.0
+    for _ in range(80):
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if curve(mid).sum() > total else (lo, mid)
+    payouts = curve(hi)
+    return payouts + (total - payouts.sum()) / len(payouts)

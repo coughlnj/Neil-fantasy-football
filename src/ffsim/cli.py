@@ -127,7 +127,7 @@ def main(argv=None) -> None:
 
     p = sub.add_parser("lineups", help="rank lineups by expected ROI in a contest")
     p.add_argument("simulation", help="simulation.npz written by 'ffsim simulate'")
-    p.add_argument("--contest", default="contests/typical_gpp.json")
+    p.add_argument("--contest", default="contests/flea_flicker.json")
     p.add_argument("--candidates", type=int, default=3000, help="lineups to build and grade")
     p.add_argument("--field", type=int, default=20000, help="opponent lineups to sample")
     p.add_argument("--portfolio", type=int, default=150, help="lineups to select")

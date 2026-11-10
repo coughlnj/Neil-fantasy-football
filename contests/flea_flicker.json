@@ -1,0 +1,18 @@
+{
+  "name": "Flea Flicker ($5, 150-max)",
+  "notes": "Places 1-10 are the real prizes. The $500,000 total, the $8 minimum cash and the shape of places 11-25,250 are assumptions; replace them with the contest's payout table.",
+  "entry_fee": 5,
+  "entries": 118000,
+  "max_entries": 150,
+  "payouts": [
+    {"from": 1, "to": 1, "prize": 100000},
+    {"from": 2, "to": 2, "prize": 40000},
+    {"from": 3, "to": 3, "prize": 20000},
+    {"from": 4, "to": 4, "prize": 10000},
+    {"from": 5, "to": 5, "prize": 7500},
+    {"from": 6, "to": 6, "prize": 5000},
+    {"from": 7, "to": 8, "prize": 2500},
+    {"from": 9, "to": 10, "prize": 1500}
+  ],
+  "tail": {"to": 25250, "total": 309500, "start": 1000, "min_prize": 8}
+}

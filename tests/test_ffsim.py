@@ -117,9 +117,17 @@ def test_payouts_add_up_to_the_prize_pool():
 
 
 def test_sample_contests_load():
-    for name in ("typical_gpp", "sample_small_gpp"):
+    for name in ("typical_gpp", "sample_small_gpp", "flea_flicker"):
         contest = load_contest(f"contests/{name}.json")
         assert 0.1 < contest.rake < 0.2
+
+
+def test_flea_flicker_table():
+    contest = load_contest("contests/flea_flicker.json")
+    assert contest.entries == 118000 and len(contest.payouts) == 25250
+    assert contest.payouts[:10].tolist() == [100000, 40000, 20000, 10000, 7500, 5000, 2500, 2500, 1500, 1500]
+    assert contest.prize_pool == pytest.approx(500000)
+    assert (np.diff(contest.payouts) <= 1e-9).all() and contest.payouts[-1] == pytest.approx(8, abs=0.01)
 
 
 def test_field_is_legal_and_matches_targets(players, settings, field):
