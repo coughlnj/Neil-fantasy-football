@@ -96,6 +96,10 @@ A contest is a JSON file with `entry_fee`, `entries` and either an explicit `pay
 - `ffsim diff old.csv new.csv` lists players whose projection moved between two files.
 - `--config my.json` on `simulate` or `lineups` overrides any default in `src/ffsim/settings.py`, for example `{"floor_percentile": 0.1, "ceiling_percentile": 0.9}`.
 
+## Historical results
+
+`python scripts/fetch_rotoguru.py 2017 2025` downloads weekly DraftKings points and salaries per player from RotoGuru into `data/history/dk_results.csv`, for fitting correlations and outcome shapes. It has not been run against the live site: the site is plain HTTP, which the cloud session that wrote it cannot reach.
+
 ## Tests
 
 ```
