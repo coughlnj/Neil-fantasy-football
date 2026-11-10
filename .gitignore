@@ -1,0 +1,16 @@
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editors
+.vs/
+.vscode/
+.idea/
+*.swp
+
+# Secrets
+.env
+*.env
+
+# Large or private raw data (commit small samples only)
+data/raw/
