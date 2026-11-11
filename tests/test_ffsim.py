@@ -4,6 +4,7 @@ import pytest
 
 from ffsim.candidates import build_candidates, search_candidates
 from ffsim.contest import Contest, generated_payouts, load_contest, tail_payouts
+from ffsim.draftkings import attach_dk, normalise_name, read_dk_entries, write_upload
 from ffsim.field import field_report, sample_field, target_ownership
 from ffsim.projections import diff_projections, load_projections
 from ffsim.roi import (adjust_roi, describe_lineups, evaluate, lineup_scores, pick_portfolio,
@@ -255,3 +256,53 @@ def test_diff_reports_movers(players):
     assert moved.iloc[0]["status"] in ("changed", "removed")
     assert set(moved["name"]) == {"H01 WR1", "H02 TE1"}
     assert moved.set_index("name").loc["H01 WR1", "change"] == pytest.approx(3)
+
+
+DK_EXPORT = """Entry ID,Contest Name,Contest ID,Entry Fee,QB,RB,RB,WR,WR,WR,TE,FLEX,DST,,Instructions
+101,Big Contest [$1 to 1st],900,$5,,,,,,,,,,,1. Column A lists entries
+102,Big Contest [$1 to 1st],900,$5,,,,,,,,,,,
+103,Other,901,$1,,,,,,,,,,,Position,Name + ID,Name,ID,Roster Position,Salary,Game Info,TeamAbbrev,AvgPointsPerGame
+,,,,,,,,,,,,,,RB,Kenneth Walker III (11),Kenneth Walker III,11,RB/FLEX,9200,KC@ATL 11/15/2026 01:00PM ET,KC,26.4
+,,,,,,,,,,,,,,WR,Amon-Ra St. Brown (12),Amon-Ra St. Brown,12,WR/FLEX,8000,KC@ATL 11/15/2026 01:00PM ET,ATL,20
+,,,,,,,,,,,,,,DST,Jaguars  (13),Jaguars ,13,DST,4000,JAX@TEN 11/15/2026 01:00PM ET,JAX,9
+,,,,,,,,,,,,,,DST,Titans  (14),Titans ,14,DST,2000,JAX@TEN 11/15/2026 01:00PM ET,TEN,6
+"""
+
+
+def test_reads_draftkings_export(tmp_path):
+    path = tmp_path / "DKEntries.csv"
+    path.write_text(DK_EXPORT)
+    entries, slate = read_dk_entries(str(path))
+    assert entries["entry_id"].tolist() == ["101", "102", "103"]
+    assert slate["dk_id"].tolist() == ["11", "12", "13", "14"]
+    assert slate.loc[0, ["team", "opponent", "salary"]].tolist() == ["KC", "ATL", 9200]
+    assert slate.loc[3, ["name", "team", "opponent"]].tolist() == ["Titans", "TEN", "JAX"]
+
+
+def test_projections_match_the_draftkings_slate(tmp_path):
+    dk = tmp_path / "DKEntries.csv"
+    dk.write_text(DK_EXPORT)
+    projections = tmp_path / "p.csv"
+    pd.DataFrame(
+        {"Player": ["Kenneth Walker", "Amon Ra St Brown", "Jacksonville DST", "Titans", "Not Playing"],
+         "Pos": ["RB", "WR", "DEF", "DST", "WR"], "Team": ["KC", "ATL", "JAC", "", "XX"],
+         "Proj": [20, 15, 8, 6, 9]}
+    ).to_csv(projections, index=False)
+    notes = []
+    players = load_projections(str(projections), read_dk_entries(str(dk))[1], log=notes.append)
+    assert sorted(players["dk_id"]) == ["11", "12", "13", "14"]
+    assert players.set_index("dk_id").loc["13", ["team", "opponent", "salary"]].tolist() == ["JAX", "TEN", 4000]
+    assert players["game"].nunique() == 2 and "Not Playing" in notes[1]
+    assert normalise_name("Amon-Ra St. Brown Jr.") == "amon ra st brown"
+
+
+def test_upload_file_has_one_lineup_per_entry(tmp_path):
+    dk = tmp_path / "DKEntries.csv"
+    dk.write_text(DK_EXPORT)
+    entries, _ = read_dk_entries(str(dk))
+    out = tmp_path / "upload.csv"
+    filled = write_upload(str(out), entries[entries["contest_id"] == "900"], [list("abcdefghi"), list("jklmnopqr"), list("stuvwxyz!")])
+    written = pd.read_csv(out, dtype=str)
+    assert filled == 2 and written["Entry ID"].tolist() == ["101", "102"]
+    assert written.columns.tolist()[4:] == ["QB", "RB", "RB.1", "WR", "WR.1", "WR.2", "TE", "FLEX", "DST"]
+    assert written.iloc[1, 4:].tolist() == list("jklmnopqr")

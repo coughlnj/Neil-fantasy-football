@@ -4,6 +4,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .draftkings import attach_dk, normalise_team
 from .settings import POSITIONS
 
 ALIASES = {
@@ -20,16 +21,21 @@ ALIASES = {
 REQUIRED = ["name", "position", "team", "opponent", "salary", "mean"]
 
 
-def load_projections(path: str) -> pd.DataFrame:
+def load_projections(path: str, dk_players: pd.DataFrame | None = None, log=lambda message: None) -> pd.DataFrame:
     """Read a CSV and return columns: name, position, team, opponent, salary, mean,
-    floor, ceiling, ownership (percent, 0-100). Floor, ceiling and ownership may be NaN."""
+    floor, ceiling, ownership (percent, 0-100). Floor, ceiling and ownership may be NaN.
+
+    With dk_players (from a DraftKings entries export), players are matched to the
+    slate by name: DraftKings supplies position, team, opponent, salary and player ID,
+    and projected players who are not on the slate are dropped."""
     raw = pd.read_csv(path)
+    required = REQUIRED if dk_players is None else ["name", "mean"]
     lookup = {c.strip().lower().replace(" ", "_"): c for c in raw.columns}
     out = pd.DataFrame()
     for field, names in ALIASES.items():
         source = next((lookup[n] for n in names if n in lookup), None)
         if source is None:
-            if field in REQUIRED:
+            if field in required:
                 raise ValueError(
                     f"{path}: no '{field}' column. Accepted names: {', '.join(names)}"
                 )
@@ -37,11 +43,21 @@ def load_projections(path: str) -> pd.DataFrame:
         else:
             out[field] = raw[source]
 
+    if dk_players is not None:
+        out["mean"] = pd.to_numeric(out["mean"], errors="coerce")
+        out, missing = attach_dk(out, dk_players)
+        missing = missing[missing["mean"] > 0].sort_values("mean", ascending=False)
+        log(f"Matched {len(out)} projected players to the DraftKings slate; {len(missing)} not on it.")
+        if len(missing):
+            log("Highest-projected unmatched: " + ", ".join(
+                f"{n} ({m:g})" for n, m in zip(missing["name"].head(8), missing["mean"].head(8))))
+
     out["position"] = (
         out["position"].astype(str).str.upper().str.strip().replace({"DEF": "DST", "D": "DST"})
     )
     for col in ("team", "opponent"):
         out[col] = out[col].astype(str).str.upper().str.strip().str.replace("@", "").str.replace("VS", "")
+        out[col] = out[col].map(normalise_team)
     for col in ("salary", "mean", "floor", "ceiling", "ownership"):
         out[col] = pd.to_numeric(
             out[col].astype(str).str.replace(r"[$,%]", "", regex=True), errors="coerce"

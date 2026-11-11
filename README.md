@@ -38,6 +38,20 @@ A CSV with one row per player. Column names are flexible (`proj`, `own%`, `opp` 
 | `ceiling`   | no       | Treated as the 85th percentile unless configured          |
 | `ownership` | for `lineups` | Projected ownership, percent                         |
 
+## Using a DraftKings entries export
+
+Reserve your entries on DraftKings, then download the entries file ("DKEntries.csv") from the lineup upload page. It lists your entries and every player on the slate with their ID, salary and game. Keep it in `data/raw/`, which is not committed.
+
+```
+ffsim dk-slate data/raw/DKEntries.csv
+ffsim simulate projections.csv --dk data/raw/DKEntries.csv
+ffsim lineups out/simulation.npz --entries data/raw/DKEntries.csv
+```
+
+- `dk-slate` lists the contests you have entered and saves the slate's players.
+- With `--dk`, projections only need `name` and `mean` (plus floor, ceiling and ownership). Players are matched to DraftKings by name; position, team, opponent and salary come from DraftKings. Projected players it cannot match are listed and dropped.
+- With `--entries`, `lineups` also writes `out/dk_upload.csv`, ready to upload: one portfolio lineup per entry in the contest, best first. The contest is matched by name; use `--contest-id` to pick another.
+
 ## How the simulator works
 
 - Each player gets a skewed distribution (different spread below and above its centre, cut off at zero) fitted so its mean, floor and ceiling match the projections.

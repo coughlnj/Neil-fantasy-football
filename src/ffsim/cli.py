@@ -9,6 +9,7 @@ import pandas as pd
 
 from .candidates import search_candidates
 from .contest import load_contest
+from .draftkings import read_dk_entries, write_upload
 from .field import field_report, sample_field, target_ownership
 from .projections import diff_projections, load_projections
 from .sample import sample_slate
@@ -20,7 +21,8 @@ from .simulate import fit_report, load_simulation, save_simulation, simulate_sla
 
 def cmd_simulate(args) -> None:
     settings = load_settings(args.config)
-    players = load_projections(args.projections)
+    dk_players = read_dk_entries(args.dk)[1] if args.dk else None
+    players = load_projections(args.projections, dk_players, log=print)
     scores, fit = simulate_slate(players, settings, args.sims, args.seed)
     os.makedirs(args.out, exist_ok=True)
     save_simulation(os.path.join(args.out, "simulation.npz"), players, scores)
@@ -53,6 +55,9 @@ def cmd_lineups(args) -> None:
     field, realised = sample_field(players, settings, field_size, args.seed)
     target = target_ownership(players, settings)
     implied = float((target * players["salary"]).sum())
+    if implied < settings["field"]["min_salary"]:
+        print(f"Note: your ownership implies an average lineup costing only ${implied:,.0f}, well under the "
+              "cap, so the field cannot match it closely. Check that ownership covers the whole slate.")
     if implied > settings["site"]["salary_cap"]:
         print(f"Note: your ownership implies an average lineup costing ${implied:,.0f}, over the cap, "
               "so the field cannot match it exactly.")
@@ -66,6 +71,7 @@ def cmd_lineups(args) -> None:
     print(f"Grading {len(candidates):,} lineups over {grade.shape[1]:,} simulated slates...")
     results = evaluate(candidates, field, grade, contest)
     table = describe_lineups(candidates, players, realised)
+    slots = table.attrs["slots"]
     adjusted = adjust_roi(results, table[["projection", "total_ownership_pct"]])
     table["adj_roi_pct"] = adjusted.round(2)
     table = pd.concat([table, results.round(3)], axis=1)
@@ -83,6 +89,9 @@ def cmd_lineups(args) -> None:
         )
     else:
         chosen = simple
+    if len(chosen) < args.portfolio:
+        print(f"Note: only {len(chosen)} lineups fit the exposure and overlap limits. Raise --finalists, "
+              "--max-exposure or --max-overlap for a full set.")
     table["in_portfolio"] = False
     table.loc[finalists[chosen], "in_portfolio"] = True
     table = table.sort_values("adj_roi_pct", ascending=False).reset_index(drop=True)
@@ -104,10 +113,39 @@ def cmd_lineups(args) -> None:
     else:
         print("\nPortfolio (top lineups one by one):\n")
         print(compare.iloc[[1]].to_string())
+    if args.entries:
+        write_dk_upload(args, players, contest, slots[finalists[chosen]], adjusted[finalists][chosen])
     if args.show:
         with pd.option_context("display.width", 250, "display.max_columns", None):
             print("\n" + picked.head(args.show).drop(columns=["in_portfolio"]).to_string(index=False))
     print(f"\nPortfolio saved to {args.portfolio_out}; all {len(table):,} graded lineups to {args.out}")
+
+
+def write_dk_upload(args, players, contest, slots, value) -> None:
+    """Write the portfolio into a DraftKings upload file, best lineup first."""
+    if "dk_id" not in players.columns:
+        raise SystemExit("No DraftKings IDs in this simulation; rerun 'ffsim simulate' with --dk.")
+    entries, _ = read_dk_entries(args.entries)
+    if args.contest_id:
+        mine = entries[entries["contest_id"] == str(args.contest_id)]
+    else:
+        mine = entries[[contest.name.startswith(n) or n in contest.name for n in entries["contest_name"]]]
+    if mine.empty:
+        raise SystemExit("No entries for this contest in the entries file. Contests in it:\n" + entries.groupby(
+            ["contest_id", "contest_name"]).size().rename("entries").reset_index().to_string(index=False))
+    ids = players["dk_id"].astype(str).to_numpy()[slots[np.argsort(-value)]]
+    filled = write_upload(args.upload_out, mine, ids.tolist())
+    print(f"\nDraftKings upload file: {filled} of {len(mine)} entries in '{mine['contest_name'].iloc[0]}' "
+          f"filled, saved to {args.upload_out}")
+
+
+def cmd_slate(args) -> None:
+    entries, players = read_dk_entries(args.entries)
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    players.to_csv(args.out, index=False)
+    games = players.groupby(["team", "opponent"]).ngroups // 2
+    print(f"{len(players)} players in {games} games saved to {args.out}\n")
+    print(entries.groupby(["contest_id", "contest_name", "entry_fee"]).size().rename("entries").reset_index().to_string(index=False))
 
 
 def cmd_field(args) -> None:
@@ -150,6 +188,7 @@ def main(argv=None) -> None:
 
     p = sub.add_parser("simulate", help="simulate a slate from a projections file")
     p.add_argument("projections")
+    p.add_argument("--dk", help="DraftKings entries export; supplies salaries, games and player IDs")
     p.add_argument("--sims", type=int, default=20000)
     p.add_argument("--out", default="out")
     p.add_argument("--config")
@@ -172,9 +211,17 @@ def main(argv=None) -> None:
     p.add_argument("--show", type=int, default=10)
     p.add_argument("--out", default="out/lineups.csv")
     p.add_argument("--portfolio-out", default="out/portfolio.csv")
+    p.add_argument("--entries", help="DraftKings entries export; writes an upload file for this contest")
+    p.add_argument("--contest-id", help="DraftKings contest ID to fill (default: match by contest name)")
+    p.add_argument("--upload-out", default="out/dk_upload.csv")
     p.add_argument("--config")
     p.add_argument("--seed", type=int)
     p.set_defaults(func=cmd_lineups)
+
+    p = sub.add_parser("dk-slate", help="list the slate and your entries from a DraftKings entries export")
+    p.add_argument("entries")
+    p.add_argument("--out", default="data/slates/dk_slate.csv")
+    p.set_defaults(func=cmd_slate)
 
     p = sub.add_parser("field", help="describe the simulated opponent lineups")
     p.add_argument("simulation")

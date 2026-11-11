@@ -97,13 +97,15 @@ def describe_lineups(lineups: np.ndarray, players: pd.DataFrame, field_own: np.n
     pos = players["position"].to_numpy()
     name = (players["name"] + " (" + players["team"] + ")").to_numpy()
     mean = players["mean"].to_numpy(float)
-    rows = []
+    rows, slots = [], []
     for lineup in lineups:
         by_pos = {p: sorted(lineup[pos[lineup] == p], key=lambda i: -mean[i]) for p in ("QB", "RB", "WR", "TE", "DST")}
         flex = next(by_pos[p].pop() for p, need in (("RB", 2), ("WR", 3), ("TE", 1)) if len(by_pos[p]) > need)
         ordered = by_pos["QB"] + by_pos["RB"] + by_pos["WR"] + by_pos["TE"] + [flex] + by_pos["DST"]
         rows.append([name[i] for i in ordered])
+        slots.append(ordered)
     out = pd.DataFrame(rows, columns=SLOTS)
+    out.attrs["slots"] = np.array(slots)
     out["salary"] = players["salary"].to_numpy()[lineups].sum(axis=1)
     out["projection"] = mean[lineups].sum(axis=1).round(2)
     out["total_ownership_pct"] = (100 * field_own[lineups].sum(axis=1)).round(1)
