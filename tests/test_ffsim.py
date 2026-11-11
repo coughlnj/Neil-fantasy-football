@@ -93,6 +93,15 @@ def test_game_correlations(players, sim):
     assert abs(corr("H01 QB1", "H02 WR1")) < 0.03
 
 
+def test_rushing_quarterback_is_tied_less_to_his_receivers(players, settings):
+    rusher = players.assign(rush_share=np.where(players["name"] == "H01 QB1", 0.45, np.nan))
+    scores, _ = simulate_slate(rusher, settings, 20000, seed=1)
+    row = {n: i for i, n in enumerate(players["name"])}
+    corr = lambda a, b: np.corrcoef(scores[row[a]], scores[row[b]])[0, 1]
+    assert corr("H01 QB1", "H01 WR1") < corr("H02 QB1", "H02 WR1") - 0.08
+    assert corr("H01 QB1", "H01 WR1") > 0.1
+
+
 def test_simulation_round_trip(tmp_path, players, sim):
     path = str(tmp_path / "s.npz")
     save_simulation(path, players, sim[0][:, :50])

@@ -29,6 +29,10 @@ def cmd_simulate(args) -> None:
     report = fit_report(players, fit, scores, settings)
     report.to_csv(os.path.join(args.out, "simulation_report.csv"), index=False)
 
+    if players["rush_share"].notna().any():
+        print(f"Rushing share supplied for {int(players['rush_share'].notna().sum())} players.")
+    else:
+        print("No rush_share column: every quarterback is treated as a typical passer.")
     print(f"Simulated {args.sims:,} slates: {len(players)} players, {players['game'].nunique()} games.")
     print(f"Largest gap between simulated and projected mean: "
           f"{(report['sim_mean'] - report['mean']).abs().max():.2f} points")
@@ -189,7 +193,7 @@ def main(argv=None) -> None:
     p = sub.add_parser("simulate", help="simulate a slate from a projections file")
     p.add_argument("projections")
     p.add_argument("--dk", help="DraftKings entries export; supplies salaries, games and player IDs")
-    p.add_argument("--sims", type=int, default=20000)
+    p.add_argument("--sims", type=int, default=50000)
     p.add_argument("--out", default="out")
     p.add_argument("--config")
     p.add_argument("--seed", type=int)

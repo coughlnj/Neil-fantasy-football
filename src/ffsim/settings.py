@@ -35,6 +35,10 @@ DEFAULTS: dict = {
         # (a third-string receiver is tied less tightly to the quarterback).
         "depth_reference": {"QB": 15.0, "RB": 12.0, "WR": 12.0, "TE": 9.0, "DST": 1.0},
         "min_depth_factor": 0.25,
+        # A quarterback who scores more by running is tied less tightly to pass catchers.
+        # Links between a QB and WRs/TEs are scaled by his passing share relative to a
+        # typical QB's. Per-player values come from an optional rush_share column.
+        "typical_qb_rush_share": 0.12,
     },
     # DraftKings classic rules.
     "site": {

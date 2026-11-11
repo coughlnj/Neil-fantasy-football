@@ -19,12 +19,19 @@ def game_correlation(game: pd.DataFrame, corr: dict) -> np.ndarray:
     team = game["team"].to_numpy()
     ref = game["position"].map(corr["depth_reference"]).to_numpy(float)
     depth = np.clip(game["mean"].to_numpy(float) / ref, corr["min_depth_factor"], 1.0)
+    typical = corr["typical_qb_rush_share"]
+    rush = game["rush_share"].to_numpy(float) if "rush_share" in game else np.full(len(game), np.nan)
+    passing = np.clip((1 - np.where(np.isnan(rush), typical, rush)) / (1 - typical), 0.3, 1.15)
     n = len(game)
     m = np.eye(n)
     for i in range(n):
         for j in range(i + 1, n):
             table = corr["same_team"] if team[i] == team[j] else corr["opponent"]
-            m[i, j] = m[j, i] = pair_correlation(pos[i], pos[j], table) * np.sqrt(depth[i] * depth[j])
+            value = pair_correlation(pos[i], pos[j], table) * np.sqrt(depth[i] * depth[j])
+            for qb, other in ((i, j), (j, i)):
+                if pos[qb] == "QB" and pos[other] in ("WR", "TE"):
+                    value *= passing[qb]
+            m[i, j] = m[j, i] = value
     return _nearest_valid(m)
 
 

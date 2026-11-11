@@ -16,6 +16,7 @@ ALIASES = {
     "mean": ["mean", "proj", "projection", "fpts", "points", "dk_points", "median"],
     "floor": ["floor", "flr", "low"],
     "ceiling": ["ceiling", "ceil", "high"],
+    "rush_share": ["rush_share", "rushing_share", "rush_pct", "rush%"],
     "ownership": ["ownership", "own", "pown", "proj_own", "projected_ownership", "own%"],
 }
 REQUIRED = ["name", "position", "team", "opponent", "salary", "mean"]
@@ -58,7 +59,7 @@ def load_projections(path: str, dk_players: pd.DataFrame | None = None, log=lamb
     for col in ("team", "opponent"):
         out[col] = out[col].astype(str).str.upper().str.strip().str.replace("@", "").str.replace("VS", "")
         out[col] = out[col].map(normalise_team)
-    for col in ("salary", "mean", "floor", "ceiling", "ownership"):
+    for col in ("salary", "mean", "floor", "ceiling", "ownership", "rush_share"):
         out[col] = pd.to_numeric(
             out[col].astype(str).str.replace(r"[$,%]", "", regex=True), errors="coerce"
         )
@@ -71,6 +72,9 @@ def load_projections(path: str, dk_players: pd.DataFrame | None = None, log=lamb
     # Ownership given as fractions (0-1) rather than percent.
     if out["ownership"].notna().any() and out["ownership"].max() <= 1.5:
         out["ownership"] = out["ownership"] * 100
+    # Rushing share given as percent (0-100) rather than a fraction.
+    if out["rush_share"].notna().any() and out["rush_share"].max() > 1:
+        out["rush_share"] = out["rush_share"] / 100
     out["game"] = [" v ".join(sorted(pair)) for pair in zip(out["team"], out["opponent"])]
     out = out.sort_values(["game", "team", "position", "mean"], ascending=[True, True, True, False])
     return out.reset_index(drop=True)

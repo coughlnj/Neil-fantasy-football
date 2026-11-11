@@ -20,7 +20,7 @@ ffsim field out/simulation.npz
 ffsim lineups out/simulation.npz
 ```
 
-`ffsim lineups` takes a little over two minutes. It writes the 150-lineup portfolio to `out/portfolio.csv` and every graded lineup to `out/lineups.csv`. Without `--contest` it uses `contests/flea_flicker.json`.
+`ffsim simulate` runs 50,000 slates by default, and `ffsim lineups` then takes about four and a half minutes; `--sims 20000` roughly halves that at the cost of noisier ROI figures. It writes the 150-lineup portfolio to `out/portfolio.csv` and every graded lineup to `out/lineups.csv`. Without `--contest` it uses `contests/flea_flicker.json`.
 
 ## Projections file
 
@@ -37,6 +37,7 @@ A CSV with one row per player. Column names are flexible (`proj`, `own%`, `opp` 
 | `floor`     | no       | Treated as the 15th percentile unless configured          |
 | `ceiling`   | no       | Treated as the 85th percentile unless configured          |
 | `ownership` | for `lineups` | Projected ownership, percent                         |
+| `rush_share` | no      | For quarterbacks: share of projected points from rushing (0.35 or 35). Blank means a typical passer (0.12) |
 
 ## Using a DraftKings entries export
 
@@ -56,6 +57,7 @@ ffsim lineups out/simulation.npz --entries data/raw/DKEntries.csv
 
 - Each player gets a skewed distribution (different spread below and above its centre, cut off at zero) fitted so its mean, floor and ceiling match the projections.
 - Players in the same game are correlated by role: a quarterback with their own pass catchers, opposing offenses with each other, a running back with their own defense, and offenses against the opposing defense. Players in different games are independent.
+- A quarterback with a `rush_share` above the typical 0.12 is tied less tightly to his and the opposing pass catchers, in proportion to how much less of his scoring comes from passing.
 - `out/simulation_report.csv` compares the simulated mean, floor and ceiling with the inputs for every player.
 
 This simulates fantasy scores with game structure. It is not a play-by-play simulation. The correlation values in `src/ffsim/settings.py` are approximate starting points, not fitted to data here.
