@@ -8,8 +8,8 @@ POSITIONS = ("QB", "RB", "WR", "TE", "DST")
 
 DEFAULTS: dict = {
     # What the floor and ceiling columns mean, as percentiles of a player's outcomes.
-    "floor_percentile": 0.15,
-    "ceiling_percentile": 0.85,
+    "floor_percentile": 0.10,
+    "ceiling_percentile": 0.90,
     # Lowest score a player can post.
     "lower_bound": {"QB": 0.0, "RB": 0.0, "WR": 0.0, "TE": 0.0, "DST": -4.0},
     # Used when a floor or ceiling is missing or inconsistent (as multiples of the mean).
@@ -50,6 +50,13 @@ DEFAULTS: dict = {
     "field": {
         "min_salary": 48000,
         "median_salary": 49700,
+        # When ownership is supplied, the average lineup salary it implies is used in
+        # place of median_salary, so the field spends what the ownership says it spends.
+        "match_salary_to_ownership": True,
+        # Share of lineups whose flex is a RB / WR / TE, e.g. {"RB": 0.4, "WR": 0.5, "TE": 0.1}.
+        # None takes it from the ownership totals per position. When set, ownership is
+        # rescaled within each position to fit.
+        "flex_split": None,
         # Share of opponent lineups by how many WRs/TEs share a team with the QB, and
         # the share of stacks that also use an opposing WR/TE. Approximate figures for
         # large tournaments; compare with `ffsim field` and adjust.

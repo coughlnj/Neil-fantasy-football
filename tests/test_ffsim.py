@@ -57,6 +57,29 @@ def test_loader_accepts_other_column_names(tmp_path):
     assert df["game"].nunique() == 1 and df["ownership"].tolist() == [12, 8]
 
 
+def test_loader_reads_provider_columns_and_picks_ownership(tmp_path, settings):
+    path = tmp_path / "p.csv"
+    pd.DataFrame(
+        {"Player": ["A", "B", "C"], "DK Pos": ["QB", "WR", "TE"], "Team": ["LA", "LA", "ARI"],
+         "Opp": ["@ARI", "@ARI", "LA"], "DK Salary": ["$6,000", "$5,000", "$3,000"], "DK Proj": [20, 12, 8],
+         "Small Field": ["10%", "30%", "50%"], "Large Field": ["12%", "20%", "40%"],
+         "DK Floor": [10, 4, 2], "DK Ceiling": [31, 22, 15], "id": [1, 2, 3]}
+    ).to_csv(path, index=False)
+    df = load_projections(str(path)).set_index("name")
+    assert df.loc["A", ["team", "opponent", "ownership", "floor", "ceiling", "dk_id"]].tolist() == ["LAR", "ARI", 12, 10, 31, "1"]
+    small = load_projections(str(path), ownership_column="Small Field").set_index("name")
+    assert small["ownership"].to_dict() == {"A": 10, "B": 30, "C": 50}
+    with pytest.raises(ValueError, match="Medium"):
+        load_projections(str(path), ownership_column="Medium")
+    # A fixed flex split rescales ownership within each position.
+    fixed = load_settings()
+    fixed["field"]["flex_split"] = {"RB": 0.4, "WR": 0.5, "TE": 0.1}
+    slate = sample_slate(games=4, seed=1)
+    pos = slate["position"].to_numpy()
+    own = target_ownership(slate, fixed)
+    assert own[pos == "TE"].sum() == pytest.approx(1.1) and own[pos == "WR"].sum() == pytest.approx(3.5)
+
+
 def test_loader_names_the_missing_column(tmp_path):
     path = tmp_path / "p.csv"
     pd.DataFrame({"name": ["A"], "position": ["QB"]}).to_csv(path, index=False)
@@ -69,8 +92,8 @@ def test_simulation_reproduces_projections(players, sim, settings):
     mean = players["mean"].to_numpy()
     width = (players["ceiling"] - players["floor"]).to_numpy()
     assert np.abs(scores.mean(axis=1) - mean).max() < 0.3
-    assert (np.abs(np.percentile(scores, 15, axis=1) - players["floor"]) < 0.05 * width + 0.3).all()
-    assert (np.abs(np.percentile(scores, 85, axis=1) - players["ceiling"]) < 0.05 * width + 0.3).all()
+    assert (np.abs(np.percentile(scores, 10, axis=1) - players["floor"]) < 0.05 * width + 0.3).all()
+    assert (np.abs(np.percentile(scores, 90, axis=1) - players["ceiling"]) < 0.05 * width + 0.3).all()
     non_dst = (players["position"] != "DST").to_numpy()
     assert scores[non_dst].min() >= 0
 

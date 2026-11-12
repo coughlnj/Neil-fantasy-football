@@ -62,7 +62,12 @@ def attach_dk(projections: pd.DataFrame, dk_players: pd.DataFrame) -> tuple[pd.D
     dst = dk[dk["position"] == "DST"]
     dst_by_team = dict(zip(dst["team"], dst.index))
 
+    by_id = {str(v): i for i, v in enumerate(dk["dk_id"])}
+
     def find(row) -> int | None:
+        given = str(row.get("dk_id", "")).split(".")[0]
+        if given in by_id:
+            return by_id[given]
         key = normalise_name(row["name"])
         position = str(row.get("position", "")).upper().strip()
         position = {"DEF": "DST", "D": "DST", "D/ST": "DST"}.get(position, position)

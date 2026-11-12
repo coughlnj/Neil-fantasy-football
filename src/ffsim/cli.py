@@ -22,7 +22,7 @@ from .simulate import fit_report, load_simulation, save_simulation, simulate_sla
 def cmd_simulate(args) -> None:
     settings = load_settings(args.config)
     dk_players = read_dk_entries(args.dk)[1] if args.dk else None
-    players = load_projections(args.projections, dk_players, log=print)
+    players = load_projections(args.projections, dk_players, log=print, ownership_column=args.ownership)
     scores, fit = simulate_slate(players, settings, args.sims, args.seed)
     os.makedirs(args.out, exist_ok=True)
     save_simulation(os.path.join(args.out, "simulation.npz"), players, scores)
@@ -192,6 +192,7 @@ def main(argv=None) -> None:
 
     p = sub.add_parser("simulate", help="simulate a slate from a projections file")
     p.add_argument("projections")
+    p.add_argument("--ownership", help="name of the ownership column to use, if the file has several")
     p.add_argument("--dk", help="DraftKings entries export; supplies salaries, games and player IDs")
     p.add_argument("--sims", type=int, default=50000)
     p.add_argument("--out", default="out")

@@ -34,9 +34,9 @@ A CSV with one row per player. Column names are flexible (`proj`, `own%`, `opp` 
 | `opponent`  | yes      | Used to group players into games                          |
 | `salary`    | yes      | DraftKings salary                                         |
 | `mean`      | yes      | Projected DraftKings points                               |
-| `floor`     | no       | Treated as the 15th percentile unless configured          |
-| `ceiling`   | no       | Treated as the 85th percentile unless configured          |
-| `ownership` | for `lineups` | Projected ownership, percent                         |
+| `floor`     | no       | Treated as the 10th percentile unless configured          |
+| `ceiling`   | no       | Treated as the 90th percentile unless configured          |
+| `ownership` | for `lineups` | Projected ownership, percent. If the file has `Large Field` and `Small Field` columns, large field is used; `--ownership "Small Field"` picks the other |
 | `rush_share` | no      | For quarterbacks: share of projected points from rushing (0.35 or 35). Blank means a typical passer (0.12) |
 
 ## Using a DraftKings entries export
@@ -119,7 +119,7 @@ A contest is a JSON file with `entry_fee`, `entries` and either an explicit `pay
 ## Other commands
 
 - `ffsim diff old.csv new.csv` lists players whose projection moved between two files.
-- `--config my.json` on `simulate` or `lineups` overrides any default in `src/ffsim/settings.py`, for example `{"floor_percentile": 0.1, "ceiling_percentile": 0.9}`.
+- `--config my.json` on `simulate` or `lineups` overrides any default in `src/ffsim/settings.py`, for example `{"floor_percentile": 0.15, "ceiling_percentile": 0.85}`.
 
 ## Historical results
 

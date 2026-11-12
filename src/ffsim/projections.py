@@ -9,20 +9,23 @@ from .settings import POSITIONS
 
 ALIASES = {
     "name": ["name", "player", "player_name", "playername"],
-    "position": ["position", "pos", "roster_position"],
+    "position": ["position", "pos", "roster_position", "dk_pos"],
     "team": ["team", "tm", "teamabbrev"],
     "opponent": ["opponent", "opp", "opp_team"],
     "salary": ["salary", "sal", "dk_salary"],
-    "mean": ["mean", "proj", "projection", "fpts", "points", "dk_points", "median"],
-    "floor": ["floor", "flr", "low"],
-    "ceiling": ["ceiling", "ceil", "high"],
+    "mean": ["mean", "proj", "projection", "fpts", "points", "dk_points", "dk_proj", "median"],
+    "floor": ["floor", "flr", "low", "dk_floor"],
+    "ceiling": ["ceiling", "ceil", "high", "dk_ceiling"],
     "rush_share": ["rush_share", "rushing_share", "rush_pct", "rush%"],
-    "ownership": ["ownership", "own", "pown", "proj_own", "projected_ownership", "own%"],
+    "ownership": ["ownership", "own", "pown", "proj_own", "projected_ownership", "own%", "large_field", "small_field"],
+    "dk_id": ["dk_id", "id", "draftkings_id"],
 }
 REQUIRED = ["name", "position", "team", "opponent", "salary", "mean"]
 
 
-def load_projections(path: str, dk_players: pd.DataFrame | None = None, log=lambda message: None) -> pd.DataFrame:
+def load_projections(
+    path: str, dk_players: pd.DataFrame | None = None, log=lambda message: None, ownership_column: str | None = None
+) -> pd.DataFrame:
     """Read a CSV and return columns: name, position, team, opponent, salary, mean,
     floor, ceiling, ownership (percent, 0-100). Floor, ceiling and ownership may be NaN.
 
@@ -32,8 +35,14 @@ def load_projections(path: str, dk_players: pd.DataFrame | None = None, log=lamb
     raw = pd.read_csv(path)
     required = REQUIRED if dk_players is None else ["name", "mean"]
     lookup = {c.strip().lower().replace(" ", "_"): c for c in raw.columns}
+    aliases = dict(ALIASES)
+    if ownership_column:
+        key = ownership_column.strip().lower().replace(" ", "_")
+        if key not in lookup:
+            raise ValueError(f"{path}: no '{ownership_column}' column for ownership")
+        aliases["ownership"] = [key]
     out = pd.DataFrame()
-    for field, names in ALIASES.items():
+    for field, names in aliases.items():
         source = next((lookup[n] for n in names if n in lookup), None)
         if source is None:
             if field in required:
@@ -64,6 +73,10 @@ def load_projections(path: str, dk_players: pd.DataFrame | None = None, log=lamb
             out[col].astype(str).str.replace(r"[$,%]", "", regex=True), errors="coerce"
         )
 
+    if out["dk_id"].notna().any():
+        out["dk_id"] = out["dk_id"].astype(str).str.replace(r"\.0$", "", regex=True)
+    else:
+        out = out.drop(columns="dk_id")
     out = out[out["position"].isin(POSITIONS)]
     out = out.dropna(subset=["salary", "mean"])
     out = out[(out["mean"] > 0) | (out["position"] == "DST")]

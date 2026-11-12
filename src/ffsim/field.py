@@ -22,6 +22,9 @@ class LineupSampler:
         pos = players["position"].to_numpy()
         self.idx = {p: np.flatnonzero(pos == p) for p in ("QB", "RB", "WR", "TE", "DST")}
         self.idx["catcher"] = np.flatnonzero(np.isin(pos, ["WR", "TE"]))
+        median = self.cfg.get("median_salary")
+        # Average salary left unspent by the lineups that are kept (infinite: no preference).
+        self.fade = max(self.cap - median, 1.0) / np.log(2) if median else np.inf
         self.catcher = np.isin(pos, ["WR", "TE"])
         mix, bb = self.cfg["stack_mix"], self.cfg["bringback_rate"]
         self.class_target = np.array(
@@ -100,8 +103,7 @@ class LineupSampler:
         leave salary unspent are kept less often so the median lineup costs about that."""
         need = np.floor(self.class_target * n).astype(int)
         need[np.argmax(self.class_target)] += n - need.sum()
-        median = self.cfg.get("median_salary")
-        fade = max(self.cap - median, 1.0) / np.log(2) if median else np.inf
+        fade = self.fade
         found = []
         for _ in range(300):
             if need.sum() == 0:
@@ -133,6 +135,11 @@ def target_ownership(players: pd.DataFrame, settings: dict) -> np.ndarray:
     for p in ("QB", "DST"):
         own[pos == p] /= own[pos == p].sum()
     flex = np.isin(pos, settings["site"]["flex_positions"])
+    split = settings["field"].get("flex_split")
+    if split:
+        total = sum(split.values())
+        for p in settings["site"]["flex_positions"]:
+            own[pos == p] *= (settings["site"]["roster"][p] + split[p] / total) / own[pos == p].sum()
     own[flex] *= 7.0 / own[flex].sum()
     return own
 
@@ -142,6 +149,9 @@ def sample_field(players: pd.DataFrame, settings: dict, n: int, seed: int | None
     rng = np.random.default_rng(seed)
     sampler = LineupSampler(players, settings)
     target = target_ownership(players, settings)
+    if settings["field"].get("match_salary_to_ownership"):
+        implied = float((target * sampler.salary).sum())
+        sampler.fade = float(np.clip(sampler.cap - implied, 100.0, 2000.0))
     active = target > 0
     logw = np.where(active, np.log(np.where(active, target, 1.0)), -np.inf)
     cfg = settings["field"]
