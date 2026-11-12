@@ -413,7 +413,11 @@ def test_contest_standings_report(tmp_path):
 
 
 def test_reads_supplied_lineups_in_several_forms(tmp_path, players, settings, field):
-    slate = players.assign(dk_id=[str(1000 + i) for i in range(len(players))])
+    letters = lambda i: chr(97 + i // 26) + chr(97 + i % 26)  # real names have no digits
+    slate = players.assign(
+        dk_id=[str(1000 + i) for i in range(len(players))],
+        name=[f"Player {letters(i)}son" for i in range(len(players))],
+    )
     good = field[0][0].tolist()
     name, ids = slate["name"].to_numpy(), slate["dk_id"].to_numpy()
     upload = tmp_path / "upload.csv"
@@ -429,8 +433,8 @@ def test_reads_supplied_lineups_in_several_forms(tmp_path, players, settings, fi
     assert len(problems) == 1 and "Nobody Atall" in problems[0] and "row 5" in problems[0]
     plain = tmp_path / "names.csv"
     plain.write_text(",".join(name[good]) + "\n")
-    assert sorted(read_lineups(str(plain), players)[0][0]) == good
+    assert sorted(read_lineups(str(plain), slate.drop(columns="dk_id"))[0][0]) == good
     assert check_lineup(good, slate) is None
     qbs = slate.index[slate["position"] == "QB"][:2].tolist()
-    assert "2 QB" in check_lineup(qbs + good[2:], slate)
+    assert check_lineup(qbs + good[2:], slate).startswith("positions are")
     assert "over the cap" in check_lineup(good, slate, cap=1000)
