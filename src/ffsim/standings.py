@@ -56,7 +56,10 @@ def standings_report(entries: pd.DataFrame, players: pd.DataFrame, slate: pd.Dat
     """Return (overall, by_group, notes). overall and by_group measure how lineups were
     built; by_group splits entries by how many their entrant has. With a slate (name,
     team, and optionally opponent and salary) stacking and salary are measured too."""
-    position = dict(zip(players["name"], players["position"]))
+    position = {}
+    for slot in SLOTS:
+        if slot != "FLEX":
+            position.update(dict.fromkeys(entries[slot].unique(), slot.rstrip("123")))
     if slate is not None and "position" in slate.columns:  # players only ever used in the flex
         for name, pos in zip(slate["name"].str.strip(), slate["position"]):
             if pd.isna(position.get(name)):
