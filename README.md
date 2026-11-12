@@ -144,6 +144,16 @@ A contest is a JSON file with `entry_fee`, `entries` and either an explicit `pay
 - `ffsim diff old.csv new.csv` lists players whose projection moved between two files.
 - `--config my.json` on `simulate` or `lineups` overrides any default in `src/ffsim/settings.py`, for example `{"floor_percentile": 0.15, "ceiling_percentile": 0.85}`.
 
+## Grading your own lineups
+
+```
+ffsim grade my_lineups.csv out/simulation.npz
+```
+
+Grades lineups you supply against the same simulated slates and opponent field: expected ROI, finish rates and expected duplicates for each, and how the whole set performs together. The file can be a DraftKings upload or entries file, or any CSV with nine players per row, given as DraftKings IDs, `Name (ID)` or names. Unreadable or illegal lineups are listed and skipped. Results go to `out/graded_lineups.csv` in the order given.
+
+Lineups from elsewhere get an unbiased grade. Lineups this tool built are graded partly on slates it searched on, so expect their figure here to be a little flattering, though lower than the figure printed when they were chosen.
+
 ## Checking the field against a real contest
 
 After a contest locks, DraftKings lets entrants download its standings, which list every lineup entered. Keep these in `data/raw/contests/` (not committed; they contain other entrants' usernames).

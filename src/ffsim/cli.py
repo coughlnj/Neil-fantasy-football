@@ -9,7 +9,7 @@ import pandas as pd
 
 from .candidates import search_candidates
 from .contest import load_contest
-from .draftkings import read_dk_entries, write_upload
+from .draftkings import check_lineup, read_dk_entries, read_lineups, write_upload
 from .field import field_report, sample_field, target_ownership
 from .projections import diff_projections, load_projections
 from .sample import sample_slate
@@ -153,6 +153,59 @@ def cmd_slate(args) -> None:
     print(entries.groupby(["contest_id", "contest_name", "entry_fee"]).size().rename("entries").reset_index().to_string(index=False))
 
 
+def cmd_grade(args) -> None:
+    settings = load_settings(args.config)
+    players, scores = load_simulation(args.simulation)
+    contest = load_contest(args.contest)
+    found, problems = read_lineups(args.lineups, players)
+    legal = []
+    for lineup in found:
+        reason = check_lineup(lineup, players, settings["site"]["salary_cap"])
+        if reason:
+            problems.append("not a legal lineup: " + reason + " (" + ", ".join(players["name"].to_numpy()[lineup]) + ")")
+        else:
+            legal.append(sorted(lineup))
+    for problem in problems[:15]:
+        print("Skipped " + problem)
+    if len(problems) > 15:
+        print(f"...and {len(problems) - 15} more skipped.")
+    if not legal:
+        raise SystemExit("No gradable lineups found.")
+    lineups = np.array(legal)
+
+    print(f"{contest.name}: ${contest.entry_fee:g} entry, {contest.entries:,} entries, "
+          f"${contest.prize_pool:,.0f} prizes ({100 * contest.rake:.1f}% rake)")
+    field_size = min(args.field, contest.entries - 1)
+    field, realised = sample_field(players, settings, field_size, args.seed)
+    print(f"Grading {len(lineups):,} lineups against {field_size:,} opponent lineups over "
+          f"{scores.shape[1]:,} simulated slates...")
+    results, payouts = evaluate(lineups, field, scores, contest, keep_payouts=True)
+    table = describe_lineups(lineups, players, realised)
+    adjusted = adjust_roi(results, table[["projection", "total_ownership_pct"]])
+    table["adj_roi_pct"] = adjusted.round(2)
+    table = pd.concat([table, results.round(3)], axis=1)
+    summary = portfolio_summary(payouts, results["roi_pct"].to_numpy(), contest.entry_fee)
+    os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+    table.to_csv(args.out, index=False)
+
+    print(f"\nAll {summary['lineups']} lineups together:")
+    print(f"  Expected ROI             {summary['expected_roi_pct']:+.1f}%")
+    print(f"  Chance of profit         {summary['profit_chance_pct']:.1f}%")
+    print(f"  Median return            {summary['median_return_pct']:+.1f}%")
+    print(f"  Chance of a 5x return    {summary['chance_of_5x_pct']:.2f}%")
+    print(f"  Chance of losing half    {summary['chance_of_losing_half_pct']:.1f}%")
+    print(f"  Lineups with positive expected ROI: {int((results['roi_pct'] > 0).sum())} of {len(lineups)}")
+    counts = pd.Series(players["name"].to_numpy()[lineups].ravel()).value_counts()
+    print("\nHighest exposures: " + ", ".join(f"{n} {100 * c / len(lineups):.0f}%" for n, c in counts.head(8).items()))
+    show = ["QB", "salary", "projection", "total_ownership_pct", "adj_roi_pct", "roi_pct", "roi_se_pct", "top1_pct",
+            "cash_pct", "expected_dupes"]
+    ranked = table.sort_values("roi_pct", ascending=False)
+    with pd.option_context("display.width", 200):
+        print(f"\nBest {args.show} by ROI:\n" + ranked.head(args.show)[show].to_string(index=False))
+        print(f"\nWorst {args.show} by ROI:\n" + ranked.tail(args.show)[show].to_string(index=False))
+    print(f"\nEvery lineup saved to {args.out}, in the order given.")
+
+
 def cmd_field(args) -> None:
     settings = load_settings(args.config)
     players, _ = load_simulation(args.simulation)
@@ -243,6 +296,17 @@ def main(argv=None) -> None:
     p.add_argument("--config")
     p.add_argument("--seed", type=int)
     p.set_defaults(func=cmd_lineups)
+
+    p = sub.add_parser("grade", help="expected ROI for lineups you supply")
+    p.add_argument("lineups", help="CSV of lineups: a DraftKings upload/entries file, or nine players per row")
+    p.add_argument("simulation", help="simulation.npz written by 'ffsim simulate'")
+    p.add_argument("--contest", default="contests/flea_flicker.json")
+    p.add_argument("--field", type=int, default=20000, help="opponent lineups to sample")
+    p.add_argument("--show", type=int, default=5)
+    p.add_argument("--out", default="out/graded_lineups.csv")
+    p.add_argument("--config")
+    p.add_argument("--seed", type=int)
+    p.set_defaults(func=cmd_grade)
 
     p = sub.add_parser("dk-slate", help="list the slate and your entries from a DraftKings entries export")
     p.add_argument("entries")

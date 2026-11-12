@@ -4,7 +4,7 @@ import pytest
 
 from ffsim.candidates import build_candidates, search_candidates
 from ffsim.contest import Contest, generated_payouts, load_contest, tail_payouts
-from ffsim.draftkings import attach_dk, normalise_name, read_dk_entries, write_upload
+from ffsim.draftkings import check_lineup, read_lineups, attach_dk, normalise_name, read_dk_entries, write_upload
 from ffsim.field import LineupSampler, field_report, sample_field, sample_field_by_group, target_ownership
 from ffsim.projections import diff_projections, load_projections
 from ffsim.roi import (adjust_roi, describe_lineups, evaluate, lineup_scores, pick_portfolio,
@@ -410,3 +410,27 @@ def test_contest_standings_report(tmp_path):
     overall, _, notes = standings_report(entries, players, slate.assign(salary=slate["salary"] * 2))
     assert "Median salary used" not in overall and "Stacks that add an opposing pass catcher" not in overall
     assert any("does not look like this contest" in n for n in notes)
+
+
+def test_reads_supplied_lineups_in_several_forms(tmp_path, players, settings, field):
+    slate = players.assign(dk_id=[str(1000 + i) for i in range(len(players))])
+    good = field[0][0].tolist()
+    name, ids = slate["name"].to_numpy(), slate["dk_id"].to_numpy()
+    upload = tmp_path / "upload.csv"
+    upload.write_text(
+        "Entry ID,Contest Name,Contest ID,Entry Fee,QB,RB,RB,WR,WR,WR,TE,FLEX,DST\n"
+        + "1,C,9,$5," + ",".join(ids[good]) + "\n"
+        + "2,C,9,$5," + ",".join(f"{name[i]} ({ids[i]})" for i in good) + "\n"
+        + "3,C,9,$5,,,,,,,,,\n"
+        + "4,C,9,$5," + ",".join(["Nobody Atall"] + list(ids[good[1:]])) + "\n"
+    )
+    lineups, problems = read_lineups(str(upload), slate)
+    assert [sorted(l) for l in lineups] == [good, good]
+    assert len(problems) == 1 and "Nobody Atall" in problems[0] and "row 5" in problems[0]
+    plain = tmp_path / "names.csv"
+    plain.write_text(",".join(name[good]) + "\n")
+    assert sorted(read_lineups(str(plain), players)[0][0]) == good
+    assert check_lineup(good, slate) is None
+    qbs = slate.index[slate["position"] == "QB"][:2].tolist()
+    assert "2 QB" in check_lineup(qbs + good[2:], slate)
+    assert "over the cap" in check_lineup(good, slate, cap=1000)
