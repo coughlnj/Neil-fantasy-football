@@ -85,17 +85,23 @@ ROI is only as good as the simulated opponents, so the field is built to hit exp
 | Target                         | Default                                         |
 |--------------------------------|-------------------------------------------------|
 | Player ownership               | Your projected ownership                        |
-| QB with no / one / two-plus of their own WRs and TEs | 16% / 51% / 33% (measured from one Flea Flicker) |
-| Stacks that add an opposing WR or TE | 40%                                       |
+| QB with no / one / two-plus of their own WRs and TEs | 12.6% / 51.9% / 35.5%     |
+| Stacks that add an opposing WR or TE | 37%                                       |
 | Flex split between RB, WR, TE  | Implied by your ownership totals per position   |
-| Median salary used             | $49,700 (none below $48,000)                    |
-| Defense facing the lineup's own QB | Rare                                        |
+| Salary left unspent            | 47% use the whole cap, 23% leave $100, 23% leave $200-400, 7% more (average $137) |
+| Defense facing the lineup's own QB | Rare (about 1%)                             |
+
+The stacking, bring-back and salary figures are measured from the 8 November 2026 $5 Flea Flicker (118,855 entries), one contest so far.
 
 `ffsim field out/simulation.npz` prints what the sampled field actually looks like on each of these, plus the players whose field ownership is furthest from your projection. Add `--out out/field.csv` to save the lineups.
 
-The stacking mix is measured from the 8 November 2026 Flea Flicker. The bring-back rate is still an estimate. Ownership and stacking targets can conflict (a 30%-owned quarterback forces ownership onto their receivers); when they do, the stack mix wins and the report shows the ownership gap.
+Ownership and stacking targets can conflict (a 30%-owned quarterback forces ownership onto their receivers); when they do, the stack mix wins and the report shows the ownership gap.
 
-Known gaps: the field has no notion of sharper and weaker entrants, of one entrant's 150 correlated lineups, or of late-swap. It also produces almost no duplicated lineups, where real large fields duplicate popular builds.
+Known gaps, from replaying that contest:
+
+- **Too uniform.** Real lineups vary far more in quality than the simulated ones: single-entry players build weaker lineups and 150-entry players stronger ones. The simulated field has neither tail.
+- **Too few duplicates.** 8.5% of real entries shared a lineup with another entry, concentrated among the highest-projected lineups; the simulated field manages about 2%.
+- **Flex split follows the ownership projections**, which that week overstated running backs and understated receivers.
 
 Output columns worth knowing:
 

@@ -22,14 +22,21 @@ class LineupSampler:
         pos = players["position"].to_numpy()
         self.idx = {p: np.flatnonzero(pos == p) for p in ("QB", "RB", "WR", "TE", "DST")}
         self.idx["catcher"] = np.flatnonzero(np.isin(pos, ["WR", "TE"]))
-        median = self.cfg.get("median_salary")
-        # Average salary left unspent by the lineups that are kept (infinite: no preference).
-        self.fade = max(self.cap - median, 1.0) / np.log(2) if median else np.inf
+        # Target share of lineups by salary left unspent (None: no preference), and how
+        # strongly the flex pick is drawn toward using up the cap while sampling.
+        self.unspent = self.cfg.get("unspent_salary")
+        self.fade = 150.0 if self.unspent else np.inf
         self.catcher = np.isin(pos, ["WR", "TE"])
-        mix, bb = self.cfg["stack_mix"], self.cfg["bringback_rate"]
-        self.class_target = np.array(
-            [mix["none"], mix["single"] * (1 - bb), mix["single"] * bb, mix["double"] * (1 - bb), mix["double"] * bb]
-        )
+        if "stack_classes" in self.cfg:
+            c = self.cfg["stack_classes"]
+            self.class_target = np.array(
+                [c["none"], c["single"], c["single_bringback"], c["double"], c["double_bringback"]], dtype=float
+            )
+        else:
+            mix, bb = self.cfg["stack_mix"], self.cfg["bringback_rate"]
+            self.class_target = np.array(
+                [mix["none"], mix["single"] * (1 - bb), mix["single"] * bb, mix["double"] * (1 - bb), mix["double"] * bb]
+            )
         self.class_target = self.class_target / self.class_target.sum()
         self.flex_bonus = {p: np.log(self.cfg["flex_weight"][p]) for p in ("RB", "WR", "TE")}
 
@@ -62,56 +69,72 @@ class LineupSampler:
         force(kind >= 3, mate_order[:, 1])
         force(np.isin(kind, [2, 4]), foe_pick[:, 0])
 
-        picks, flex_keys, flex_ids = [qb[:, None]], [], []
-        for position, count in (("RB", 2), ("WR", 3), ("TE", 1)):
-            idx = self.idx[position]
-            k = keys(position)
-            k += adjust[:, idx]
-            order = np.argsort(-k, axis=1)[:, : count + 1]
-            picks.append(idx[order[:, :count]])
-            flex_ids.append(idx[order[:, count]])
-            flex_keys.append(np.take_along_axis(k, order[:, count : count + 1], axis=1)[:, 0] + self.flex_bonus[position])
-        best = np.argmax(np.stack(flex_keys, axis=1), axis=1)
-        picks.append(np.stack(flex_ids, axis=1)[np.arange(batch), best][:, None])
-
+        # Defense first, so the flex can be chosen to fit the salary that is left.
         dst_idx = self.idx["DST"]
         penalty = np.log(max(self.cfg["dst_vs_qb_penalty"], 1e-12))
         k = keys("DST") + np.where(self.opp[dst_idx][None, :] == q_team, penalty, 0.0)
-        picks.append(dst_idx[k.argmax(axis=1)][:, None])
+        dst = dst_idx[k.argmax(axis=1)]
 
-        lineups = np.concatenate(picks, axis=1)
+        picks, pools = [qb[:, None]], []
+        for position, count in (("RB", 2), ("WR", 3), ("TE", 1)):
+            idx = self.idx[position]
+            k = keys(position) + adjust[:, idx]
+            order = np.argsort(-k, axis=1)[:, :count]
+            picks.append(idx[order])
+            np.put_along_axis(k, order, -np.inf, axis=1)
+            pools.append((idx, k + self.flex_bonus[position]))
+        core = np.concatenate(picks + [dst[:, None]], axis=1)
+        base = self.salary[core].sum(axis=1)
+
+        # The flex takes whoever fits: players who would break the cap are out, and the
+        # more salary a player would leave unspent the less likely he is.
+        flex_idx = np.concatenate([idx for idx, _ in pools])
+        k = np.concatenate([key for _, key in pools], axis=1)
+        left = self.cap - base[:, None] - self.salary[flex_idx][None, :]
+        fill = 0.0 if np.isinf(self.fade) else -left / self.fade
+        k = np.where(left >= 0, k + fill, -np.inf)
+        choice = k.argmax(axis=1)
+        fits = np.isfinite(k[np.arange(batch), choice])
+        lineups = np.concatenate([core[:, :-1], flex_idx[choice][:, None], core[:, -1:]], axis=1)
+
         catcher = self.catcher[lineups]
         mates = (catcher & (self.team[lineups] == q_team)).sum(axis=1)
         bring = (catcher & (self.team[lineups] == q_opp)).any(axis=1)
         got = np.where(mates == 0, 0, 2 * np.minimum(mates, 2) - 1 + bring)
-        return lineups, self.salary[lineups].sum(axis=1), got == kind
+        return lineups, self.salary[lineups].sum(axis=1), fits & (got == kind), base
 
     def salary_tilt(self, logw: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-        """Lean the weights toward cheaper or dearer players so that a typical draw
-        costs about the cap, where the lineups worth keeping are. Returns the weights."""
+        """Lean the weights toward cheaper or dearer players so that, before the flex is
+        chosen, a typical lineup has about one typical flex salary left. Returns the weights."""
+        flex = np.concatenate([self.idx[p] for p in ("RB", "WR", "TE")])
+        weight = np.exp(logw[flex] - logw[flex].max())
+        room = float((weight * self.salary[flex]).sum() / weight.sum())
+        if not np.isinf(self.fade):
+            room += self.fade
         lo, hi = -3.0, 3.0  # change in log-weight per $1,000 of salary
         for _ in range(9):
             mid = (lo + hi) / 2
             kind = rng.choice(5, size=4000, p=self.class_target)
-            _, total, ok = self._draw(logw + mid * self.salary / 1000, kind, rng)
-            lo, hi = (mid, hi) if ok.any() and np.median(total[ok]) < self.cap else (lo, mid)
+            base = self._draw(logw + mid * self.salary / 1000, kind, rng)[3]
+            lo, hi = (mid, hi) if np.median(base) < self.cap - room else (lo, mid)
         return logw + (lo + hi) / 2 * self.salary / 1000
 
     def sample(self, logw: np.ndarray, n: int, rng: np.random.Generator) -> np.ndarray:
         """Return n lineups as sorted player indices, shape (n, 9), with stack types in
-        the configured proportions. When a median salary is configured, lineups that
-        leave salary unspent are kept less often so the median lineup costs about that."""
+        the configured proportions."""
         need = np.floor(self.class_target * n).astype(int)
         need[np.argmax(self.class_target)] += n - need.sum()
-        fade = self.fade
-        found = []
-        for _ in range(300):
-            if need.sum() == 0:
-                break
+        found, empty = [], 0
+        while need.sum() > 0 and empty < 40:
             kind = rng.choice(5, size=20000, p=need / need.sum())
-            lineups, total, ok = self._draw(logw, kind, rng)
+            lineups, total, ok, _ = self._draw(logw, kind, rng)
             ok &= (total <= self.cap) & (total >= self.cfg["min_salary"])
-            ok &= rng.random(len(kind)) < np.exp(-(self.cap - total) / fade)
+            if self.unspent and ok.any():  # thin to the target spread of unspent salary
+                band = np.searchsorted([100, 200, 500, 1000, 2000], self.cap - total, side="right")
+                seen = np.bincount(band[ok], minlength=6) / ok.sum()
+                keep = np.divide(self.unspent, seen, out=np.zeros(6), where=seen > 0)
+                ok &= rng.random(len(kind)) < (keep / keep.max())[band]
+            empty = 0 if ok.any() else empty + 1
             for c in np.flatnonzero(need):
                 take = lineups[ok & (kind == c)][: need[c]]
                 found.append(take)
@@ -149,9 +172,6 @@ def sample_field(players: pd.DataFrame, settings: dict, n: int, seed: int | None
     rng = np.random.default_rng(seed)
     sampler = LineupSampler(players, settings)
     target = target_ownership(players, settings)
-    if settings["field"].get("match_salary_to_ownership"):
-        implied = float((target * sampler.salary).sum())
-        sampler.fade = float(np.clip(sampler.cap - implied, 100.0, 2000.0))
     active = target > 0
     logw = np.where(active, np.log(np.where(active, target, 1.0)), -np.inf)
     cfg = settings["field"]
@@ -207,6 +227,7 @@ def field_report(lineups: np.ndarray, players: pd.DataFrame, settings: dict) -> 
         ("Flex is a WR", pct(flex["WR"]), "%"),
         ("Flex is a TE", pct(flex["TE"]), "%"),
         ("Median salary used", float(np.median(salary)), "$"),
+        ("Average salary left unspent", round(float(settings["site"]["salary_cap"] - salary.mean()), 0), "$"),
         ("Lineups using $49,500 or more", pct(salary >= settings["site"]["salary_cap"] - 500), "%"),
         ("Lineups that duplicate another in this sample", pct(np.repeat(counts, counts) > 1), "%"),
     ]

@@ -48,25 +48,26 @@ DEFAULTS: dict = {
     },
     # How opponents build lineups.
     "field": {
+        # The figures below are measured from the 8 November 2026 $5 Flea Flicker
+        # (118,855 entries).
         "min_salary": 48000,
-        "median_salary": 49700,
-        # When ownership is supplied, the average lineup salary it implies is used in
-        # place of median_salary, so the field spends what the ownership says it spends.
-        "match_salary_to_ownership": True,
+        # Share of lineups by salary left unspent: $0, $100, $200-400, $500-900,
+        # $1,000-1,900, $2,000 or more.
+        "unspent_salary": [0.469, 0.229, 0.234, 0.057, 0.010, 0.001],
+        # Share of opponent lineups by stack type: how many WRs/TEs share a team with
+        # the QB, and whether an opposing WR/TE is added ("bringback").
+        "stack_classes": {
+            "none": 0.126, "single": 0.351, "single_bringback": 0.168,
+            "double": 0.199, "double_bringback": 0.156,
+        },
+        "dst_vs_qb_penalty": 0.2,  # weight multiplier for a DST facing the lineup's QB
+        "flex_weight": {"RB": 1.0, "WR": 1.0, "TE": 0.35},
+        "calibration_rounds": 12,
+        "calibration_lineups": 8000,
         # Share of lineups whose flex is a RB / WR / TE, e.g. {"RB": 0.4, "WR": 0.5, "TE": 0.1}.
         # None takes it from the ownership totals per position. When set, ownership is
         # rescaled within each position to fit.
         "flex_split": None,
-        # Share of opponent lineups by how many WRs/TEs share a team with the QB. Measured
-        # from the 8 November 2026 Flea Flicker (118,855 entries, on the 76% whose QB's
-        # team was known): 16% / 51% / 33%.
-        "stack_mix": {"none": 0.16, "single": 0.51, "double": 0.33},
-        # Share of stacks that also use an opposing WR/TE. Still an estimate.
-        "bringback_rate": 0.40,
-        "dst_vs_qb_penalty": 0.05,  # weight multiplier for a DST facing the lineup's QB
-        "flex_weight": {"RB": 1.0, "WR": 1.0, "TE": 0.35},
-        "calibration_rounds": 8,
-        "calibration_lineups": 8000,
     },
     # How candidate lineups are built.
     "candidates": {

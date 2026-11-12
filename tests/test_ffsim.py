@@ -181,10 +181,11 @@ def test_field_is_legal_and_matches_targets(players, settings, field):
     report = field_report(field, players, settings).set_index("measure")["value"]
     assert report[["QB with no pass catcher", "QB with exactly 1 pass catcher", "QB with 2 or more pass catchers"]].sum() == pytest.approx(100, abs=0.2)
     assert report[["Flex is a RB", "Flex is a WR", "Flex is a TE"]].sum() == pytest.approx(100, abs=0.2)
-    assert report["QB with no pass catcher"] == pytest.approx(16, abs=0.5)
-    assert report["QB with 2 or more pass catchers"] == pytest.approx(33, abs=0.5)
-    assert report["Stacks that add an opposing pass catcher"] == pytest.approx(40, abs=1)
-    assert report["Median salary used"] >= 49500 and report["Defense facing its own QB"] < 5
+    assert report["QB with no pass catcher"] == pytest.approx(12.6, abs=0.5)
+    assert report["QB with 2 or more pass catchers"] == pytest.approx(35.5, abs=0.5)
+    assert report["Stacks that add an opposing pass catcher"] == pytest.approx(37.1, abs=1)
+    assert report["Median salary used"] >= 49700 and report["Defense facing its own QB"] < 5
+    assert 100 < report["Average salary left unspent"] < 180
 
 
 def test_field_survives_ownership_it_cannot_match(players, settings):

@@ -48,8 +48,10 @@ def read_standings(path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
          "ownership": players["%Drafted"].str.rstrip("%").astype(float),
          "points": players["FPTS"].astype(float)}
     )
+    # A player used both in his own slot and in the flex is listed once for each.
+    players = players.groupby("name", as_index=False).agg(ownership=("ownership", "sum"), points=("points", "first"))
     players["position"] = players["name"].map(position)
-    return entries, players.reset_index(drop=True)
+    return entries, players
 
 
 def standings_report(entries: pd.DataFrame, players: pd.DataFrame, slate: pd.DataFrame | None = None):
