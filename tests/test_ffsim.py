@@ -11,6 +11,7 @@ from ffsim.roi import (adjust_roi, describe_lineups, evaluate, lineup_scores, pi
                        pick_portfolio_for_growth, portfolio_summary)
 from ffsim.sample import sample_slate
 from ffsim.settings import load_settings
+from ffsim.standings import read_standings, standings_report
 from ffsim.simulate import load_simulation, save_simulation, simulate_slate
 
 
@@ -180,8 +181,8 @@ def test_field_is_legal_and_matches_targets(players, settings, field):
     report = field_report(field, players, settings).set_index("measure")["value"]
     assert report[["QB with no pass catcher", "QB with exactly 1 pass catcher", "QB with 2 or more pass catchers"]].sum() == pytest.approx(100, abs=0.2)
     assert report[["Flex is a RB", "Flex is a WR", "Flex is a TE"]].sum() == pytest.approx(100, abs=0.2)
-    assert report["QB with no pass catcher"] == pytest.approx(17, abs=0.5)
-    assert report["QB with 2 or more pass catchers"] == pytest.approx(38, abs=0.5)
+    assert report["QB with no pass catcher"] == pytest.approx(16, abs=0.5)
+    assert report["QB with 2 or more pass catchers"] == pytest.approx(33, abs=0.5)
     assert report["Stacks that add an opposing pass catcher"] == pytest.approx(40, abs=1)
     assert report["Median salary used"] >= 49500 and report["Defense facing its own QB"] < 5
 
@@ -338,3 +339,41 @@ def test_upload_file_has_one_lineup_per_entry(tmp_path):
     assert filled == 2 and written["Entry ID"].tolist() == ["101", "102"]
     assert written.columns.tolist()[4:] == ["QB", "RB", "RB.1", "WR", "WR.1", "WR.2", "TE", "FLEX", "DST"]
     assert written.iloc[1, 4:].tolist() == list("jklmnopqr")
+
+
+STANDINGS = """Rank,EntryId,EntryName,TimeRemaining,Points,Lineup,,Player,Roster Position,%Drafted,FPTS
+1,1,ann (1/2),0,200.5,DST Bears  FLEX Tom Tight QB Quinn Back RB Ron One RB Rex Two TE Ted End WR Will A WR Wes B WR Walt C,,Quinn Back,QB,75.00%,30
+2,2,ann (2/2),0,180,DST Bears  FLEX Tom Tight QB Quinn Back RB Ron One RB Rex Two TE Ted End WR Will A WR Wes B WR Walt C,,Ted End,TE,100.00%,12
+3,3,bob,0,150,DST Lions  FLEX Ray Three QB Quinn Back RB Ron One RB Rex Two TE Ted End WR Will A WR Wes B WR Xavi D,,Tom Tight,FLEX,50.00%,9
+4,4,cat,0,120,DST Lions  FLEX Xavi D QB Other Guy RB Ray Three RB Rex Two TE Tom Tight WR Will A WR Wes B WR Walt C,,Will A,WR,100.00%,20
+5,5,dan,0,0,,,,
+"""
+
+
+def test_contest_standings_report(tmp_path):
+    path = tmp_path / "standings.csv"
+    path.write_text(STANDINGS)
+    entries, players = read_standings(str(path))
+    assert len(entries) == 4 and entries["user_entries"].tolist() == [2, 2, 1, 1]
+    assert entries.loc[0, ["QB", "FLEX", "DST"]].tolist() == ["Quinn Back", "Tom Tight", "Bears"]
+    assert players.set_index("name").loc["Tom Tight", "position"] == "TE"
+    slate = pd.DataFrame(
+        {"name": ["Quinn Back", "Will A", "Wes B", "Ted End", "Tom Tight", "Xavi D", "Walt C", "Ron One", "Rex Two",
+                  "Bears", "Lions", "Ray Three"],
+         "team": ["AAA", "AAA", "BBB", "AAA", "CCC", "BBB", "CCC", "AAA", "CCC", "CCC", "BBB", "DDD"],
+         "opponent": ["BBB", "BBB", "AAA", "BBB", "DDD", "AAA", "DDD", "BBB", "DDD", "DDD", "AAA", "CCC"],
+         "salary": [7000, 6000, 6000, 4000, 3000, 5000, 5000, 6500, 6000, 3000, 3000, 4500]}
+    )
+    overall, groups, notes = standings_report(entries, players, slate)
+    assert overall["Flex is a TE"] == 50 and overall["Flex is a RB"] == 25
+    assert overall["Shares its lineup with another entry"] == 50
+    # Quinn Back's lineups all pair him with Will A and Ted End; the fourth QB is unknown.
+    assert overall["QB with 2 or more pass catchers"] == 100
+    assert overall["Stacks that add an opposing pass catcher"] == 100
+    assert overall["QB with his own RB"] == 100 and overall["Defense facing its own QB"] == pytest.approx(33.3)
+    assert overall["Median salary used"] == 46500
+    assert groups.loc["Share of entries", "1 entry"] == 50 and groups.loc["Average points", "2-19 entries"] == 190.25
+    # A slate from another week (salaries over the cap) drops salary and opponent measures.
+    overall, _, notes = standings_report(entries, players, slate.assign(salary=slate["salary"] * 2))
+    assert "Median salary used" not in overall and "Stacks that add an opposing pass catcher" not in overall
+    assert any("does not look like this contest" in n for n in notes)

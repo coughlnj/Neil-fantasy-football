@@ -57,10 +57,11 @@ DEFAULTS: dict = {
         # None takes it from the ownership totals per position. When set, ownership is
         # rescaled within each position to fit.
         "flex_split": None,
-        # Share of opponent lineups by how many WRs/TEs share a team with the QB, and
-        # the share of stacks that also use an opposing WR/TE. Approximate figures for
-        # large tournaments; compare with `ffsim field` and adjust.
-        "stack_mix": {"none": 0.17, "single": 0.45, "double": 0.38},
+        # Share of opponent lineups by how many WRs/TEs share a team with the QB. Measured
+        # from the 8 November 2026 Flea Flicker (118,855 entries, on the 76% whose QB's
+        # team was known): 16% / 51% / 33%.
+        "stack_mix": {"none": 0.16, "single": 0.51, "double": 0.33},
+        # Share of stacks that also use an opposing WR/TE. Still an estimate.
         "bringback_rate": 0.40,
         "dst_vs_qb_penalty": 0.05,  # weight multiplier for a DST facing the lineup's QB
         "flex_weight": {"RB": 1.0, "WR": 1.0, "TE": 0.35},

@@ -16,6 +16,7 @@ from .sample import sample_slate
 from .roi import (adjust_roi, describe_lineups, evaluate, pick_portfolio, pick_portfolio_for_growth,
                   portfolio_summary)
 from .settings import load_settings
+from .standings import read_standings, standings_report
 from .simulate import fit_report, load_simulation, save_simulation, simulate_slate
 
 
@@ -171,6 +172,26 @@ def cmd_field(args) -> None:
         print(f"\nField lineups saved to {args.out}")
 
 
+def cmd_contest_report(args) -> None:
+    entries, players = read_standings(args.standings)
+    slate = pd.read_csv(args.slate) if args.slate else None
+    overall, groups, notes = standings_report(entries, players, slate)
+    users = entries["user"].nunique()
+    print(f"{len(entries):,} entries from {users:,} entrants.\n")
+    table = pd.concat([overall, groups], axis=1)
+    with pd.option_context("display.width", 200):
+        print(table.to_string())
+    for note in notes:
+        print("\n" + note)
+    by_pos = players.groupby("position")["ownership"].sum().round(1)
+    print("\nActual ownership by position (percent): " + ", ".join(f"{p} {v:g}" for p, v in by_pos.items()))
+    print("\nMost-owned players:\n")
+    print(players.sort_values("ownership", ascending=False).head(args.show).to_string(index=False))
+    if args.out:
+        os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
+        table.to_csv(args.out)
+
+
 def cmd_diff(args) -> None:
     moved = diff_projections(load_projections(args.old), load_projections(args.new), args.min_change)
     if moved.empty:
@@ -236,6 +257,13 @@ def main(argv=None) -> None:
     p.add_argument("--config")
     p.add_argument("--seed", type=int)
     p.set_defaults(func=cmd_field)
+
+    p = sub.add_parser("contest-report", help="measure how the real field built, from a contest standings export")
+    p.add_argument("standings", help="DraftKings contest standings CSV (or the zip it came in)")
+    p.add_argument("--slate", help="CSV with name, team, opponent and salary for that slate; enables stacking and salary")
+    p.add_argument("--show", type=int, default=15)
+    p.add_argument("--out", help="save the report table to this CSV")
+    p.set_defaults(func=cmd_contest_report)
 
     p = sub.add_parser("diff", help="show whose projection changed between two files")
     p.add_argument("old")

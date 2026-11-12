@@ -85,7 +85,7 @@ ROI is only as good as the simulated opponents, so the field is built to hit exp
 | Target                         | Default                                         |
 |--------------------------------|-------------------------------------------------|
 | Player ownership               | Your projected ownership                        |
-| QB with no / one / two-plus of their own WRs and TEs | 17% / 45% / 38%           |
+| QB with no / one / two-plus of their own WRs and TEs | 16% / 51% / 33% (measured from one Flea Flicker) |
 | Stacks that add an opposing WR or TE | 40%                                       |
 | Flex split between RB, WR, TE  | Implied by your ownership totals per position   |
 | Median salary used             | $49,700 (none below $48,000)                    |
@@ -93,7 +93,7 @@ ROI is only as good as the simulated opponents, so the field is built to hit exp
 
 `ffsim field out/simulation.npz` prints what the sampled field actually looks like on each of these, plus the players whose field ownership is furthest from your projection. Add `--out out/field.csv` to save the lineups.
 
-The stacking and salary defaults are estimates for large tournaments, not measured from contest data. Ownership and stacking targets can conflict (a 30%-owned quarterback forces ownership onto their receivers); when they do, the stack mix wins and the report shows the ownership gap.
+The stacking mix is measured from the 8 November 2026 Flea Flicker. The bring-back rate is still an estimate. Ownership and stacking targets can conflict (a 30%-owned quarterback forces ownership onto their receivers); when they do, the stack mix wins and the report shows the ownership gap.
 
 Known gaps: the field has no notion of sharper and weaker entrants, of one entrant's 150 correlated lineups, or of late-swap. It also produces almost no duplicated lineups, where real large fields duplicate popular builds.
 
@@ -120,6 +120,16 @@ A contest is a JSON file with `entry_fee`, `entries` and either an explicit `pay
 
 - `ffsim diff old.csv new.csv` lists players whose projection moved between two files.
 - `--config my.json` on `simulate` or `lineups` overrides any default in `src/ffsim/settings.py`, for example `{"floor_percentile": 0.15, "ceiling_percentile": 0.85}`.
+
+## Checking the field against a real contest
+
+After a contest locks, DraftKings lets entrants download its standings, which list every lineup entered. Keep these in `data/raw/contests/` (not committed; they contain other entrants' usernames).
+
+```
+ffsim contest-report data/raw/contests/standings.csv --slate that-weeks-slate.csv
+```
+
+It reports, overall and by how many entries each entrant has: flex use, duplicated lineups, stacking, salary used and average score, plus actual ownership. Compare it with `ffsim field` for the same slate. `--slate` is a CSV with name, team, opponent and salary for that week (the output of `ffsim dk-slate`, or a projections file); without it, stacking and salary are skipped.
 
 ## Historical results
 
