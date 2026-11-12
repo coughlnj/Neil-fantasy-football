@@ -1,0 +1,15 @@
+{
+  "name": "Sample small tournament (illustrative payout table)",
+  "entry_fee": 10,
+  "entries": 1000,
+  "payouts": [
+    {"from": 1, "to": 1, "prize": 1170},
+    {"from": 2, "to": 2, "prize": 700},
+    {"from": 3, "to": 3, "prize": 450},
+    {"from": 4, "to": 5, "prize": 300},
+    {"from": 6, "to": 10, "prize": 150},
+    {"from": 11, "to": 25, "prize": 60},
+    {"from": 26, "to": 60, "prize": 30},
+    {"from": 61, "to": 220, "prize": 18}
+  ]
+}
