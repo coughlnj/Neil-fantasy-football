@@ -5,7 +5,7 @@ import pytest
 from ffsim.candidates import build_candidates, search_candidates
 from ffsim.contest import Contest, generated_payouts, load_contest, tail_payouts
 from ffsim.draftkings import attach_dk, normalise_name, read_dk_entries, write_upload
-from ffsim.field import field_report, sample_field, target_ownership
+from ffsim.field import LineupSampler, field_report, sample_field, sample_field_by_group, target_ownership
 from ffsim.projections import diff_projections, load_projections
 from ffsim.roi import (adjust_roi, describe_lineups, evaluate, lineup_scores, pick_portfolio,
                        pick_portfolio_for_growth, portfolio_summary)
@@ -175,7 +175,7 @@ def test_tail_fills_in_missing_places():
 def test_field_is_legal_and_matches_targets(players, settings, field):
     field, realised = field
     check_legal(field, players, settings, settings["field"]["min_salary"])
-    assert np.abs(realised - target_ownership(players, settings)).max() < 0.08
+    assert np.abs(realised - target_ownership(players, settings)).max() < 0.12
     assert np.abs(realised - target_ownership(players, settings)).mean() < 0.005
     assert realised.sum() == pytest.approx(9)
     report = field_report(field, players, settings).set_index("measure")["value"]
@@ -186,6 +186,38 @@ def test_field_is_legal_and_matches_targets(players, settings, field):
     assert report["Stacks that add an opposing pass catcher"] == pytest.approx(37.1, abs=1)
     assert report["Median salary used"] >= 49700 and report["Defense facing its own QB"] < 5
     assert 100 < report["Average salary left unspent"] < 180
+
+
+def test_best_of_selection_raises_lineup_quality(players, settings):
+    sampler = LineupSampler(players, settings)
+    own = target_ownership(players, settings)
+    logw = np.where(own > 0, np.log(np.where(own > 0, own, 1.0)), -np.inf)
+    value = players["mean"].to_numpy(float)
+    rng = np.random.default_rng(0)
+    tilted = sampler.salary_tilt(logw, rng)
+    total = lambda best_of: value[sampler.sample(tilted, 1500, rng, best_of=best_of, value=value)].sum(axis=1).mean()
+    plain, some, lots = total(1), total(2.5), total(12)
+    assert plain < some - 1 < lots - 2
+    picked = sampler.sample(tilted, 400, rng, best_of=12, value=value)
+    check_legal(picked, players, settings, settings["field"]["min_salary"])
+
+
+def test_field_groups_differ_in_quality_and_duplicate_more(players, settings):
+    lineups, realised, group = sample_field_by_group(players, settings, 6000, seed=1)
+    names = [g["name"] for g in settings["field"]["groups"]]
+    assert names == ["casual", "typical", "optimizer"]
+    shares = np.bincount(group, minlength=3) / len(group)
+    assert shares == pytest.approx([0.25, 0.68, 0.07], abs=0.01)
+    total = players["mean"].to_numpy(float)[lineups].sum(axis=1)
+    casual, typical, optimizer = (total[group == i].mean() for i in range(3))
+    assert casual < typical - 1 and optimizer > typical + 5
+    # Optimizer-style lineups cluster tightly at the top; casual ones are spread out.
+    assert total[group == 2].std() < total[group == 1].std() < total[group == 0].std()
+    uniform = load_settings()
+    uniform["field"]["groups"] = None
+    flat, _, labels = sample_field_by_group(players, uniform, 3000, seed=1)
+    assert set(labels) == {0}
+    assert players["mean"].to_numpy(float)[flat].sum(axis=1).std() < total.std()
 
 
 def test_field_survives_ownership_it_cannot_match(players, settings):

@@ -97,11 +97,28 @@ The stacking, bring-back and salary figures are measured from the 8 November 202
 
 Ownership and stacking targets can conflict (a 30%-owned quarterback forces ownership onto their receivers); when they do, the stack mix wins and the report shows the ownership gap.
 
-Known gaps, from replaying that contest:
+The field is also made of three kinds of builder, tuned by replaying that contest so the simulated field's spread of lineup quality and its duplicated lineups match the real one:
 
-- **Too uniform.** Real lineups vary far more in quality than the simulated ones: single-entry players build weaker lineups and 150-entry players stronger ones. The simulated field has neither tail.
-- **Too few duplicates.** 8.5% of real entries shared a lineup with another entry, concentrated among the highest-projected lineups; the simulated field manages about 2%.
-- **Flex split follows the ownership projections**, which that week overstated running backs and understated receivers.
+| Builder   | Share | How they build                                                        |
+|-----------|-------|-----------------------------------------------------------------------|
+| Casual    | 25%   | Loosely tied to ownership, more off-the-board players, fewer stacks   |
+| Typical   | 68%   | Follows ownership                                                     |
+| Optimizer | 7%    | Each lineup is the highest-projected of 40 draws; these are the lineups that get duplicated |
+
+Replayed at full size (118,855 lineups), the simulated field against the real one:
+
+| Measure                                         | Real  | Simulated |
+|-------------------------------------------------|-------|-----------|
+| Shares its lineup with another entry            | 8.5%  | 7.0%      |
+| Duplicated share, top tenth by projection       | 39.2% | 43.7%     |
+| Spread (sd) of projected lineup totals          | 7.92  | 7.79      |
+| Projected total, 1st / 99th percentile vs average | -21.6 / +14.6 | -20.1 / +13.8 |
+
+Known gaps:
+
+- **One contest.** Everything above is fitted to a single week, so it has not yet been tested on a contest it was not tuned to.
+- **Flex split follows the ownership projections**, which that week overstated running backs and understated receivers (simulated flex 59% RB / 9% WR; real 40% / 24%).
+- **No repeated entries.** Some real entrants enter one lineup many times (up to 150); the simulated field does not.
 
 Output columns worth knowing:
 

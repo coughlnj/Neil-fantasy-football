@@ -24,8 +24,9 @@ class LineupSampler:
         self.idx["catcher"] = np.flatnonzero(np.isin(pos, ["WR", "TE"]))
         # Target share of lineups by salary left unspent (None: no preference), and how
         # strongly the flex pick is drawn toward using up the cap while sampling.
-        self.unspent = self.cfg.get("unspent_salary")
-        self.fade = 150.0 if self.unspent else np.inf
+        unspent = self.cfg.get("unspent_salary")
+        self.unspent = np.array(unspent, dtype=float) if unspent else None
+        self.fade = 150.0 if unspent else np.inf
         self.catcher = np.isin(pos, ["WR", "TE"])
         if "stack_classes" in self.cfg:
             c = self.cfg["stack_classes"]
@@ -103,7 +104,7 @@ class LineupSampler:
         got = np.where(mates == 0, 0, 2 * np.minimum(mates, 2) - 1 + bring)
         return lineups, self.salary[lineups].sum(axis=1), fits & (got == kind), base
 
-    def salary_tilt(self, logw: np.ndarray, rng: np.random.Generator) -> np.ndarray:
+    def salary_tilt(self, logw: np.ndarray, rng: np.random.Generator, classes: np.ndarray | None = None) -> np.ndarray:
         """Lean the weights toward cheaper or dearer players so that, before the flex is
         chosen, a typical lineup has about one typical flex salary left. Returns the weights."""
         flex = np.concatenate([self.idx[p] for p in ("RB", "WR", "TE")])
@@ -114,22 +115,39 @@ class LineupSampler:
         lo, hi = -3.0, 3.0  # change in log-weight per $1,000 of salary
         for _ in range(9):
             mid = (lo + hi) / 2
-            kind = rng.choice(5, size=4000, p=self.class_target)
+            kind = rng.choice(5, size=4000, p=self.class_target if classes is None else classes)
             base = self._draw(logw + mid * self.salary / 1000, kind, rng)[3]
             lo, hi = (mid, hi) if np.median(base) < self.cap - room else (lo, mid)
         return logw + (lo + hi) / 2 * self.salary / 1000
 
-    def sample(self, logw: np.ndarray, n: int, rng: np.random.Generator) -> np.ndarray:
+    def sample(
+        self,
+        logw: np.ndarray,
+        n: int,
+        rng: np.random.Generator,
+        classes: np.ndarray | None = None,
+        best_of: float = 1.0,
+        value: np.ndarray | None = None,
+    ) -> np.ndarray:
         """Return n lineups as sorted player indices, shape (n, 9), with stack types in
-        the configured proportions."""
-        need = np.floor(self.class_target * n).astype(int)
-        need[np.argmax(self.class_target)] += n - need.sum()
-        found, empty = [], 0
+        the given proportions (default: the configured ones).
+
+        best_of models how hard entrants optimise: each lineup is the highest-valued of
+        that many draws (value is per player, e.g. projected points). 2.5 means half the
+        lineups are the best of 2 and half the best of 3; 1 means no selection."""
+        classes = self.class_target if classes is None else np.asarray(classes, dtype=float) / np.sum(classes)
+        if value is None or best_of <= 1:
+            best_of = 1.0
+        draws = int(np.ceil(best_of))
+        want = np.floor(classes * n).astype(int)
+        want[np.argmax(classes)] += n - want.sum()
+        need = want * draws
+        found, empty = [[] for _ in range(5)], 0
         while need.sum() > 0 and empty < 40:
             kind = rng.choice(5, size=20000, p=need / need.sum())
             lineups, total, ok, _ = self._draw(logw, kind, rng)
             ok &= (total <= self.cap) & (total >= self.cfg["min_salary"])
-            if self.unspent and ok.any():  # thin to the target spread of unspent salary
+            if self.unspent is not None and ok.any():  # thin to the target spread of unspent salary
                 band = np.searchsorted([100, 200, 500, 1000, 2000], self.cap - total, side="right")
                 seen = np.bincount(band[ok], minlength=6) / ok.sum()
                 keep = np.divide(self.unspent, seen, out=np.zeros(6), where=seen > 0)
@@ -137,14 +155,25 @@ class LineupSampler:
             empty = 0 if ok.any() else empty + 1
             for c in np.flatnonzero(need):
                 take = lineups[ok & (kind == c)][: need[c]]
-                found.append(take)
+                found[c].append(take)
                 need[c] -= len(take)
         if need.sum() > 0:
             raise RuntimeError(
                 "Could not build enough lineups inside the salary window. Check salaries and "
                 "ownership, or lower field.min_salary."
             )
-        out = np.sort(np.concatenate(found), axis=1)
+        chosen = []
+        for c in np.flatnonzero(want):
+            sets = np.concatenate(found[c]).reshape(want[c], draws, -1)
+            if draws > 1:
+                score = value[sets].sum(axis=2)
+                fewer = rng.random(want[c]) >= best_of - (draws - 1)  # these get one draw fewer
+                score[fewer, -1] = -np.inf
+                sets = sets[np.arange(want[c]), score.argmax(axis=1)]
+            else:
+                sets = sets[:, 0]
+            chosen.append(sets)
+        out = np.sort(np.concatenate(chosen), axis=1)
         return out[rng.permutation(len(out))]
 
 
@@ -167,38 +196,89 @@ def target_ownership(players: pd.DataFrame, settings: dict) -> np.ndarray:
     return own
 
 
-def sample_field(players: pd.DataFrame, settings: dict, n: int, seed: int | None = None):
-    """Sample n opponent lineups. Returns (lineups, realised ownership fractions)."""
+def entrant_groups(settings: dict) -> list[dict]:
+    """The kinds of entrant in the field. Without field.groups, one group using the
+    field-wide stack types."""
+    cfg = settings["field"]
+    groups = cfg.get("groups")
+    if not groups:
+        c = cfg["stack_classes"]
+        return [{"name": "everyone", "share": 1.0, "sharpness": 1.0, "best_of": 1.0,
+                 "stack_classes": [c["none"], c["single"], c["single_bringback"], c["double"], c["double_bringback"]]}]
+    return groups
+
+
+def sample_field_by_group(players: pd.DataFrame, settings: dict, n: int, seed: int | None = None):
+    """Sample n opponent lineups. Returns (lineups, realised ownership fractions, group
+    index of each lineup)."""
     rng = np.random.default_rng(seed)
     sampler = LineupSampler(players, settings)
     target = target_ownership(players, settings)
+    groups = entrant_groups(settings)
+    shares = np.array([g["share"] for g in groups], dtype=float)
+    shares = shares / shares.sum()
+    value = players["mean"].to_numpy(float) if "mean" in players.columns else None
+    wanted_unspent = sampler.unspent.copy() if sampler.unspent is not None else None
     active = target > 0
     logw = np.where(active, np.log(np.where(active, target, 1.0)), -np.inf)
     cfg = settings["field"]
     pos = players["position"].to_numpy()
+
+    def draw(weights: np.ndarray, count: int):
+        sizes = np.floor(shares * count).astype(int)
+        sizes[np.argmax(shares)] += count - sizes.sum()
+        parts, labels = [], []
+        for number, (group, size) in enumerate(zip(groups, sizes)):
+            if size == 0:
+                continue
+            classes = np.asarray(group["stack_classes"], dtype=float)
+            classes = classes / classes.sum()
+            # Sharpness below 1 flattens the weights: more off-the-board picks.
+            own = np.where(active, weights * group.get("sharpness", 1.0), -np.inf)
+            tilted = sampler.salary_tilt(own, rng, classes)
+            parts.append(sampler.sample(tilted, size, rng, classes, group.get("best_of", 1.0), value))
+            labels.append(np.full(size, number))
+        order = rng.permutation(count)
+        return np.concatenate(parts)[order], np.concatenate(labels)[order]
+
     start = logw.copy()
-    best, best_flex, best_gap = logw.copy(), dict(sampler.flex_bonus), np.inf
+    best = (logw.copy(), dict(sampler.flex_bonus), None if wanted_unspent is None else sampler.unspent.copy())
+    best_gap = np.inf
     # Nudge the weights until sampled ownership matches the target. Adjustments are
     # capped, and the best round is kept, so targets that cannot all be met at once
     # (given salaries) settle on the closest achievable field instead of running away.
     for _ in range(cfg["calibration_rounds"]):
         try:
-            trial = sampler.sample(sampler.salary_tilt(logw, rng), cfg["calibration_lineups"], rng)
+            trial, _ = draw(logw, cfg["calibration_lineups"])
         except RuntimeError:
             break
         seen = np.bincount(trial.ravel(), minlength=len(players)) / len(trial)
         gap = np.abs(seen - target).max()
         if gap < best_gap:
-            best, best_flex, best_gap = logw.copy(), dict(sampler.flex_bonus), gap
+            best = (logw.copy(), dict(sampler.flex_bonus), None if wanted_unspent is None else sampler.unspent.copy())
+            best_gap = gap
+        if wanted_unspent is not None:  # selection shifts salary use; steer it back
+            band = np.searchsorted([100, 200, 500, 1000, 2000], sampler.cap - sampler.salary[trial].sum(axis=1), side="right")
+            got = np.maximum(np.bincount(band, minlength=6) / len(trial), 1e-4)
+            sampler.unspent = sampler.unspent * (np.maximum(wanted_unspent, 1e-4) / got) ** 0.7
+            sampler.unspent = sampler.unspent / sampler.unspent.sum()
         for p, slots in settings["site"]["roster"].items():
             if p in sampler.flex_bonus:
                 want, have = target[pos == p].sum() - slots, seen[pos == p].sum() - slots
                 sampler.flex_bonus[p] += 0.8 * np.clip(np.log(max(want, 0.005) / max(have, 0.005)), -2.0, 2.0)
         step = np.log(target[active]) - np.log(np.maximum(seen[active], 0.2 / len(trial)))
         logw[active] = np.clip(logw[active] + 0.8 * np.clip(step, -2.0, 2.0), start[active] - 3.0, start[active] + 3.0)
-    sampler.flex_bonus = best_flex
-    lineups = sampler.sample(sampler.salary_tilt(best, rng), n, rng)
+    logw, sampler.flex_bonus, unspent = best
+    if unspent is not None:
+        sampler.unspent = unspent
+    lineups, labels = draw(logw, n)
     realised = np.bincount(lineups.ravel(), minlength=len(players)) / len(lineups)
+    return lineups, realised, labels
+
+
+def sample_field(players: pd.DataFrame, settings: dict, n: int, seed: int | None = None):
+    """Sample n opponent lineups. Returns (lineups, realised ownership fractions)."""
+    lineups, realised, _ = sample_field_by_group(players, settings, n, seed)
     return lineups, realised
 
 
@@ -231,4 +311,8 @@ def field_report(lineups: np.ndarray, players: pd.DataFrame, settings: dict) -> 
         ("Lineups using $49,500 or more", pct(salary >= settings["site"]["salary_cap"] - 500), "%"),
         ("Lineups that duplicate another in this sample", pct(np.repeat(counts, counts) > 1), "%"),
     ]
+    if "mean" in players.columns:
+        totals = players["mean"].to_numpy(float)[lineups].sum(axis=1)
+        rows.append(("Average projected lineup total", round(float(totals.mean()), 1), "pts"))
+        rows.append(("Spread (sd) of projected lineup totals", round(float(totals.std()), 2), "pts"))
     return pd.DataFrame(rows, columns=["measure", "value", "unit"])

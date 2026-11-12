@@ -60,6 +60,20 @@ DEFAULTS: dict = {
             "none": 0.126, "single": 0.351, "single_bringback": 0.168,
             "double": 0.199, "double_bringback": 0.156,
         },
+        # Kinds of builder in the field, tuned so the simulated field's spread of lineup
+        # quality and its duplicated lineups match that contest. Each has its share of
+        # entries, its stack types (same order as stack_classes), a sharpness (below 1
+        # spreads picks toward less popular players) and best_of (each lineup is the
+        # highest-projected of that many draws; high values behave like an optimizer,
+        # and produce the duplicates). Set to None for a single uniform field.
+        "groups": [
+            {"name": "casual", "share": 0.25, "sharpness": 0.2, "best_of": 1,
+             "stack_classes": [0.298, 0.424, 0.109, 0.117, 0.052]},
+            {"name": "typical", "share": 0.68, "sharpness": 1.0, "best_of": 1,
+             "stack_classes": [0.071, 0.327, 0.187, 0.224, 0.19]},
+            {"name": "optimizer", "share": 0.07, "sharpness": 1.0, "best_of": 40,
+             "stack_classes": [0.048, 0.321, 0.190, 0.245, 0.196]},
+        ],
         "dst_vs_qb_penalty": 0.2,  # weight multiplier for a DST facing the lineup's QB
         "flex_weight": {"RB": 1.0, "WR": 1.0, "TE": 0.35},
         "calibration_rounds": 12,
