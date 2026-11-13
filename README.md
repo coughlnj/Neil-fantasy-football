@@ -154,6 +154,24 @@ Grades lineups you supply against the same simulated slates and opponent field: 
 
 Lineups from elsewhere get an unbiased grade. Lineups this tool built are graded partly on slates it searched on, so expect their figure here to be a little flattering, though lower than the figure printed when they were chosen.
 
+## During the games: live ranking and late swaps
+
+Download the contest standings while games are in progress (for example at 2pm, 3pm and 3:30pm before the 4pm games), then:
+
+```
+ffsim live standings.csv --entries data/raw/DKEntries.csv --projections latest_projections.csv
+```
+
+Every opponent's real lineup and live score is in that file, so no simulated field is used. Only the points still to come are simulated: full projections for games not yet started, and a share for games in progress. How much of each game is left is worked out from the player-minutes remaining DraftKings reports for each entry.
+
+It prints, and saves to `out/live/`:
+
+- **Your lineups ranked by expected prize**, with rank and points now, players and salary still to start, projected points to come, projected final score, and the chance of a top-1% finish and of cashing.
+- **Late swaps:** for each lineup, the best swap among players whose game has not started, in a slot their position fits and within the salary cap. A swap is found on half the simulations and recommended only if it also clearly gains on the other half; the rest are listed as within the noise.
+- **`dk_swap_upload.csv`**: the changed lineups, ready to upload to DraftKings.
+
+Your lineups are found by the entry IDs in your entries export (or `--user NAME`). A run takes about three minutes; `--sims 20000` is steadier and slower. Limits: a player in a game in progress is projected from his pre-game numbers scaled by time left, not from how his game is going, and swaps only replace a player within his own roster slot.
+
 ## Checking the field against a real contest
 
 After a contest locks, DraftKings lets entrants download its standings, which list every lineup entered. Keep these in `data/raw/contests/` (not committed; they contain other entrants' usernames).

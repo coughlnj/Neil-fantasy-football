@@ -37,7 +37,8 @@ def read_standings(path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     user = filled["EntryName"].str.replace(r" \(\d+/\d+\)$", "", regex=True)
     entries = pd.DataFrame(
         {"rank": filled["Rank"].astype(int), "entry_id": filled["EntryId"], "user": user,
-         "user_entries": user.map(user.value_counts()), "points": filled["Points"].astype(float)}
+         "user_entries": user.map(user.value_counts()), "points": filled["Points"].astype(float),
+         "minutes_remaining": pd.to_numeric(filled["TimeRemaining"], errors="coerce")}
     )
     if showdown:
         entries = pd.concat([entries, slots], axis=1).reset_index(drop=True)

@@ -5,6 +5,7 @@ import pytest
 from ffsim.candidates import build_candidates, search_candidates
 from ffsim.contest import Contest, generated_payouts, load_contest, tail_payouts
 from ffsim.draftkings import check_lineup, read_lineups, attach_dk, normalise_name, read_dk_entries, write_upload
+from ffsim import live
 from ffsim.field import LineupSampler, field_report, sample_field, sample_field_by_group, target_ownership
 from ffsim.projections import diff_projections, load_projections
 from ffsim.roi import (adjust_roi, describe_lineups, evaluate, lineup_scores, pick_portfolio,
@@ -474,3 +475,73 @@ def test_captain_mode_standings_report(tmp_path):
     assert overall["Average salary left unspent"] == pytest.approx(50000 - (45000 * 2 + 44500 + 47000) / 4)
     assert groups.loc["Share of entries", "2-19 entries"] == 50
     assert "2 times" in notes[0]
+
+
+def slot_lineup(players, rng, games=None):
+    """A lineup in roster-slot order (QB, RB, RB, WR, WR, WR, TE, FLEX, DST)."""
+    pool = players if games is None else players[players["game"].isin(games)]
+    pick = lambda pos, n: rng.choice(pool.index[pool["position"] == pos], n, replace=False).tolist()
+    wr = pick("WR", 4)
+    return pick("QB", 1) + pick("RB", 2) + wr[:3] + pick("TE", 1) + wr[3:] + pick("DST", 1)
+
+
+def test_time_left_in_each_game_is_recovered_from_player_minutes(players):
+    rng = np.random.default_rng(0)
+    games = sorted(players["game"].unique())
+    truth = pd.Series([0.0, 0.0, 0.15, 0.15, 0.4, 1.0, 1.0, 1.0, 1.0, 1.0], index=games)
+    lineups = np.array([slot_lineup(players, rng) for _ in range(400)])
+    minutes = (60 * players["game"].map(truth).to_numpy()[lineups]).sum(axis=1)
+    entries = pd.DataFrame({"minutes_remaining": minutes})
+    assert live.game_time_left(entries, lineups, players).to_dict() == pytest.approx(truth.to_dict(), abs=1e-6)
+
+
+def test_remaining_projection_shrinks_with_time_left(players):
+    games = sorted(players["game"].unique())
+    left = pd.Series([0.0, 0.25] + [1.0] * 8, index=games)
+    rest = live.remaining_projections(players, left)
+    done, part, fresh = (players["game"] == g for g in games[:3])
+    assert (rest.loc[done, "mean"] == 0).all() and (rest.loc[done, "ceiling"] == 0).all()
+    assert rest.loc[part, "mean"].to_numpy() == pytest.approx(players.loc[part, "mean"].to_numpy() / 4)
+    spread = lambda df: (df["ceiling"] - df["mean"]).to_numpy()
+    assert spread(rest[part]) == pytest.approx(spread(players[part]) / 2)
+    cols = ["mean", "floor", "ceiling"]
+    assert rest.loc[fresh, cols].to_numpy(float) == pytest.approx(players.loc[fresh, cols].to_numpy(float))
+
+
+def test_finished_players_keep_their_score(players, settings):
+    games = sorted(players["game"].unique())
+    left = pd.Series([0.0] * 5 + [1.0] * 5, index=games)
+    points = np.arange(len(players), dtype=float)
+    scores = live.simulate_finish(players, points, left, settings, 300, seed=1)
+    over = players["game"].isin(games[:5]).to_numpy()
+    assert (scores[over] == points[over, None]).all()
+    star = (~over) & (players["mean"] > 10).to_numpy()
+    assert (scores[star].mean(axis=1) > points[star] + 5).all() and scores[star].std(axis=1).min() > 1
+
+
+def test_swaps_stay_legal_and_find_the_better_player(players, settings):
+    rng = np.random.default_rng(1)
+    games = sorted(players["game"].unique())
+    left = pd.Series([0.0] * 5 + [1.0] * 5, index=games)
+    time_left = players["game"].map(left).to_numpy(float)
+    slate = players.copy()
+    late_wr = slate.index[(slate["position"] == "WR") & slate["game"].isin(games[5:])]
+    dud, star = late_wr[0], late_wr[1]
+    slate.loc[dud, ["mean", "floor", "ceiling", "salary"]] = [4.0, 1.0, 8.0, 5000]
+    slate.loc[star, ["mean", "floor", "ceiling", "salary"]] = [30.0, 20.0, 42.0, 4000]
+    mine = np.array(slot_lineup(slate.drop(index=[dud, star]), rng))
+    mine[3] = dud  # a weak receiver who has not started, in the first WR slot
+    cap = int(slate["salary"].to_numpy()[mine].sum()) + 500
+    options = live.swap_options(mine, slate, time_left, cap, min_mean=4.0)
+    pos, salary = slate["position"].to_numpy(), slate["salary"].to_numpy()
+    assert options and (3, star) in options
+    for slot, incoming in options:
+        assert time_left[mine[slot]] == 1 and time_left[incoming] == 1 and incoming not in mine
+        assert pos[incoming] in live.SLOT_POSITIONS[live.SLOTS[slot]]
+        assert salary[incoming] - salary[mine[slot]] <= 500
+    field = np.array([slot_lineup(slate.drop(index=[dud, star]), rng) for _ in range(60)])
+    scores = live.simulate_finish(slate, np.zeros(len(slate)), left, settings, 600, seed=1)
+    contest = Contest("t", 5, 61, np.array([150.0, 60, 30, 20, 10]))
+    swapped, table = live.suggest_swaps(mine[None, :], field, scores, slate, time_left, contest, cap, rounds=1)
+    assert table.loc[0, ["slot", "out", "in"]].tolist() == ["WR1", dud, star] and bool(table.loc[0, "made"])
+    assert swapped[0].tolist() == mine[:3].tolist() + [star] + mine[4:].tolist()
