@@ -162,6 +162,8 @@ After a contest locks, DraftKings lets entrants download its standings, which li
 ffsim contest-report data/raw/contests/standings.csv --slate that-weeks-slate.csv
 ```
 
+Single-game captain-mode contests are read too, with their own measures (duplicated lineups, and with a slate file, team splits, salary and captain position); the lineup tools themselves only build full-roster lineups.
+
 It reports, overall and by how many entries each entrant has: flex use, duplicated lineups, stacking, salary used and average score, plus actual ownership. Compare it with `ffsim field` for the same slate. `--slate` is a CSV with name, team, opponent and salary for that week (the output of `ffsim dk-slate`, or a projections file); without it, stacking and salary are skipped.
 
 ## Historical results

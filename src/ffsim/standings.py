@@ -13,6 +13,8 @@ from .draftkings import normalise_name
 SLOTS = ["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE", "FLEX", "DST"]
 _LINEUP = r"^DST (.*?) FLEX (.*?) QB (.*?) RB (.*?) RB (.*?) TE (.*?) WR (.*?) WR (.*?) WR (.*)$"
 _ORDER = ["DST", "FLEX", "QB", "RB1", "RB2", "TE", "WR1", "WR2", "WR3"]
+SHOWDOWN_SLOTS = ["CPT", "FLEX1", "FLEX2", "FLEX3", "FLEX4", "FLEX5"]
+_SHOWDOWN = r"^CPT (.*?) FLEX (.*?) FLEX (.*?) FLEX (.*?) FLEX (.*?) FLEX (.*)$"
 GROUPS = [("1 entry", 1, 1), ("2-19 entries", 2, 19), ("20-149 entries", 20, 149), ("150 entries", 150, 10**9)]
 
 
@@ -24,19 +26,33 @@ def read_standings(path: str) -> tuple[pd.DataFrame, pd.DataFrame]:
     if "Lineup" not in raw.columns or "%Drafted" not in raw.columns:
         raise ValueError(f"{path}: not a DraftKings contest standings export")
     filled = raw[raw["Lineup"].notna() & raw["EntryId"].notna()]
-    slots = filled["Lineup"].str.extract(_LINEUP)
-    slots.columns = _ORDER
+    showdown = filled["Lineup"].str.startswith("CPT ").mean() > 0.5
+    slots = filled["Lineup"].str.extract(_SHOWDOWN if showdown else _LINEUP)
+    slots.columns = SHOWDOWN_SLOTS if showdown else _ORDER
     slots = slots.apply(lambda col: col.str.strip())
-    parsed = slots["DST"].notna()
+    parsed = slots.notna().all(axis=1)
     if not parsed.any():
-        raise ValueError(f"{path}: no classic (QB/RB/WR/TE/FLEX/DST) lineups found")
+        raise ValueError(f"{path}: no classic or captain-mode lineups found")
     filled, slots = filled[parsed], slots[parsed]
     user = filled["EntryName"].str.replace(r" \(\d+/\d+\)$", "", regex=True)
     entries = pd.DataFrame(
         {"rank": filled["Rank"].astype(int), "entry_id": filled["EntryId"], "user": user,
          "user_entries": user.map(user.value_counts()), "points": filled["Points"].astype(float)}
     )
+    if showdown:
+        entries = pd.concat([entries, slots], axis=1).reset_index(drop=True)
+        listed = raw[["Player", "Roster Position", "%Drafted", "FPTS"]].dropna(subset=["Player"])
+        listed = listed.assign(name=listed["Player"].str.strip(), own=listed["%Drafted"].str.rstrip("%").astype(float))
+        captain = listed[listed["Roster Position"] == "CPT"].groupby("name")["own"].sum()
+        flex = listed[listed["Roster Position"] != "CPT"].groupby("name").agg(own=("own", "sum"), points=("FPTS", "first"))
+        players = pd.DataFrame({"captain_ownership": captain, "flex_ownership": flex["own"]}).fillna(0.0)
+        players["ownership"] = players["captain_ownership"] + players["flex_ownership"]
+        players["points"] = flex["points"].astype(float)
+        players = players.rename_axis("name").reset_index().sort_values("ownership", ascending=False)
+        entries.attrs["format"] = "showdown"
+        return entries, players.reset_index(drop=True)
     entries = pd.concat([entries, slots[SLOTS]], axis=1).reset_index(drop=True)
+    entries.attrs["format"] = "classic"
 
     position = {}
     for slot in SLOTS:
@@ -129,6 +145,56 @@ def standings_report(entries: pd.DataFrame, players: pd.DataFrame, slate: pd.Dat
 
     everyone = pd.Series(True, index=entries.index)
     overall = pd.Series({"Share of entries": 100.0, **summarise(everyone)}, name="all entries")
+    groups = {}
+    for label, low, high in GROUPS:
+        rows = entries["user_entries"].between(low, high)
+        groups[label] = {"Share of entries": round(100 * float(rows.mean()), 1), **summarise(rows)}
+    return overall, pd.DataFrame(groups), notes
+
+
+def showdown_report(entries: pd.DataFrame, players: pd.DataFrame, slate: pd.DataFrame | None = None):
+    """Like standings_report, for a single-game captain-mode contest. Two lineups are
+    the same only if they have the same captain and the same five others. With a slate
+    (name, team, salary, position) team splits, salary and captain position are measured."""
+    flex = entries[SHOWDOWN_SLOTS[1:]]
+    key = entries["CPT"] + "||" + flex.apply(lambda row: "|".join(sorted(row)), axis=1)
+    copies = key.map(key.value_counts())
+    same_six = flex.assign(c=entries["CPT"]).apply(lambda row: "|".join(sorted(row)), axis=1)
+    measures = {
+        "Shares its lineup with another entry": copies > 1,
+        "In a group of 5+ identical lineups": copies >= 5,
+        "In a group of 20+ identical lineups": copies >= 20,
+        "In a group of 100+ identical lineups": copies >= 100,
+        "Same six players as another entry (any captain)": same_six.map(same_six.value_counts()) > 1,
+    }
+    numbers = {"Average copies of each entry's lineup": copies.astype(float), "Average points": entries["points"]}
+    notes = [f"{key.nunique():,} distinct lineups; the most-entered one appears {int(copies.max())} times."]
+
+    if slate is not None:
+        known = slate.assign(key=slate["name"].map(normalise_name)).sort_values("salary").drop_duplicates("key").set_index("key")
+        look = lambda col: entries[SHOWDOWN_SLOTS].apply(lambda c: c.map(normalise_name).map(known[col]))
+        team, salary = look("team"), look("salary").astype(float)
+        complete = team.notna().all(axis=1)
+        notes.append(f"Team splits and salary measured on {complete.mean():.0%} of entries (all six players on the slate file).")
+        side = team.eq(team["CPT"], axis=0).sum(axis=1)  # players on the captain's team, captain included
+        for n in range(1, 7):
+            measures[f"{n} from the captain's team, {6 - n} from the other"] = (side == n).where(complete)
+        total = (salary.sum(axis=1) + 0.5 * salary["CPT"]).where(complete)
+        measures["Uses $49,500 or more"] = (total >= 49500).where(complete)
+        measures["Uses the whole $50,000"] = (total == 50000).where(complete)
+        numbers["Average salary left unspent"] = 50000 - total
+        if "position" in known.columns:
+            cpt_pos = entries["CPT"].map(normalise_name).map(known["position"])
+            for pos in ("QB", "RB", "WR", "TE", "K", "DST"):
+                measures[f"Captain is a {pos}"] = (cpt_pos == pos).where(cpt_pos.notna())
+
+    def summarise(rows: pd.Series) -> dict:
+        out = {name: round(100 * float(cond[rows].astype(float).mean()), 1) for name, cond in measures.items()}
+        for name, value in numbers.items():
+            out[name] = round(float(value[rows].mean()), 2)
+        return out
+
+    overall = pd.Series({"Share of entries": 100.0, **summarise(pd.Series(True, index=entries.index))}, name="all entries")
     groups = {}
     for label, low, high in GROUPS:
         rows = entries["user_entries"].between(low, high)

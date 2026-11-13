@@ -11,7 +11,7 @@ from ffsim.roi import (adjust_roi, describe_lineups, evaluate, lineup_scores, pi
                        pick_portfolio_for_growth, portfolio_summary)
 from ffsim.sample import sample_slate
 from ffsim.settings import load_settings
-from ffsim.standings import read_standings, standings_report
+from ffsim.standings import read_standings, showdown_report, standings_report
 from ffsim.simulate import load_simulation, save_simulation, simulate_slate
 
 
@@ -438,3 +438,39 @@ def test_reads_supplied_lineups_in_several_forms(tmp_path, players, settings, fi
     qbs = slate.index[slate["position"] == "QB"][:2].tolist()
     assert check_lineup(qbs + good[2:], slate).startswith("positions are")
     assert "over the cap" in check_lineup(good, slate, cap=1000)
+
+
+SHOWDOWN = """Rank,EntryId,EntryName,TimeRemaining,Points,Lineup,,Player,Roster Position,%Drafted,FPTS
+1,1,ann (1/2),0,90,CPT Al Arm FLEX Bo Back FLEX Cy Catch FLEX Di End FLEX Home D  FLEX Ed Kick,,Al Arm,FLEX,25.00%,20
+2,2,ann (2/2),0,80,CPT Al Arm FLEX Cy Catch FLEX Bo Back FLEX Di End FLEX Home D  FLEX Ed Kick,,Al Arm,CPT,75.00%,30
+3,3,bob,0,70,CPT Bo Back FLEX Al Arm FLEX Cy Catch FLEX Di End FLEX Home D  FLEX Ed Kick,,Bo Back,FLEX,50.00%,10
+4,4,cat,0,60,CPT Al Arm FLEX Bo Back FLEX Cy Catch FLEX Fy Far FLEX Gus Go FLEX Ed Kick,,Bo Back,CPT,25.00%,15
+5,5,dan,0,0,,,,
+"""
+
+
+def test_captain_mode_standings_report(tmp_path):
+    path = tmp_path / "showdown.csv"
+    path.write_text(SHOWDOWN)
+    entries, players = read_standings(str(path))
+    assert entries.attrs["format"] == "showdown" and len(entries) == 4
+    assert entries.loc[2, ["CPT", "FLEX1", "FLEX5"]].tolist() == ["Bo Back", "Al Arm", "Ed Kick"]
+    arm = players.set_index("name").loc["Al Arm"]
+    assert (arm["captain_ownership"], arm["flex_ownership"], arm["ownership"], arm["points"]) == (75, 25, 100, 20)
+    slate = pd.DataFrame(
+        {"name": ["Al Arm", "Bo Back", "Cy Catch", "Di End", "Home D", "Ed Kick", "Fy Far", "Gus Go"],
+         "team": ["HOM", "HOM", "HOM", "AWY", "HOM", "AWY", "AWY", "AWY"],
+         "position": ["QB", "RB", "WR", "TE", "DST", "K", "WR", "RB"],
+         "salary": [10000, 9000, 8000, 5000, 4000, 4000, 6000, 5000]}
+    )
+    overall, groups, notes = showdown_report(entries, players, slate)
+    # Entries 1 and 2 are the same lineup in a different order; entry 3 has the same six
+    # players under a different captain, which is a different lineup.
+    assert overall["Shares its lineup with another entry"] == 50
+    assert overall["Same six players as another entry (any captain)"] == 75
+    assert overall["4 from the captain's team, 2 from the other"] == 75
+    assert overall["3 from the captain's team, 3 from the other"] == 25
+    assert overall["Captain is a QB"] == 75 and overall["Captain is a RB"] == 25
+    assert overall["Average salary left unspent"] == pytest.approx(50000 - (45000 * 2 + 44500 + 47000) / 4)
+    assert groups.loc["Share of entries", "2-19 entries"] == 50
+    assert "2 times" in notes[0]

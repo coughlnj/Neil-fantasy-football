@@ -16,7 +16,7 @@ from .sample import sample_slate
 from .roi import (adjust_roi, describe_lineups, evaluate, pick_portfolio, pick_portfolio_for_growth,
                   portfolio_summary)
 from .settings import load_settings
-from .standings import read_standings, standings_report
+from .standings import read_standings, showdown_report, standings_report
 from .simulate import fit_report, load_simulation, save_simulation, simulate_slate
 
 
@@ -228,16 +228,18 @@ def cmd_field(args) -> None:
 def cmd_contest_report(args) -> None:
     entries, players = read_standings(args.standings)
     slate = pd.read_csv(args.slate) if args.slate else None
-    overall, groups, notes = standings_report(entries, players, slate)
+    showdown = entries.attrs.get("format") == "showdown"
+    overall, groups, notes = (showdown_report if showdown else standings_report)(entries, players, slate)
     users = entries["user"].nunique()
-    print(f"{len(entries):,} entries from {users:,} entrants.\n")
+    print(f"{len(entries):,} {'captain-mode ' if showdown else ''}entries from {users:,} entrants.\n")
     table = pd.concat([overall, groups], axis=1)
     with pd.option_context("display.width", 200):
         print(table.to_string())
     for note in notes:
         print("\n" + note)
-    by_pos = players.groupby("position")["ownership"].sum().round(1)
-    print("\nActual ownership by position (percent): " + ", ".join(f"{p} {v:g}" for p, v in by_pos.items()))
+    if not showdown:
+        by_pos = players.groupby("position")["ownership"].sum().round(1)
+        print("\nActual ownership by position (percent): " + ", ".join(f"{p} {v:g}" for p, v in by_pos.items()))
     print("\nMost-owned players:\n")
     print(players.sort_values("ownership", ascending=False).head(args.show).to_string(index=False))
     if args.out:
