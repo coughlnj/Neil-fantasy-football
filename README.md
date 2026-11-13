@@ -64,7 +64,7 @@ This simulates fantasy scores with game structure. It is not a play-by-play simu
 
 ## How the lineup analyzer works
 
-- **Opponents:** samples a field of lineups (20,000 by default). See "The opponent field" below.
+- **Opponents:** samples a field of lineups, one for every other entry in the contest (`--field 20000` is faster but makes ROI figures noisier: two 20,000-lineup samples moved a 150-lineup set's ROI by 20 points). See "The opponent field" below.
 - **Candidates:** a wide search. An optimizer builds a few hundred lineups, each the best for a blend of the mean projections and one simulated slate. Then 200,000 lineups are sampled around the players those lineups favour, screened against part of the field, and re-sampled around the survivors. The best 5,000 go on to full grading.
 - **Grading:** in every simulated slate each candidate is ranked against the field and paid from the contest's payout table. Duplicated lineups split prizes. Grading uses slates the search never saw, so a lineup is never graded on a slate it was built or screened on.
 - **Portfolio:** 150 lineups chosen as a set from the top 2,000 (see "Choosing the portfolio"), subject to a per-player exposure cap and a limit on shared players. Saved to `out/portfolio.csv`.

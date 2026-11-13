@@ -56,7 +56,7 @@ def cmd_lineups(args) -> None:
 
     print(f"{contest.name}: ${contest.entry_fee:g} entry, {contest.entries:,} entries, "
           f"${contest.prize_pool:,.0f} prizes ({100 * contest.rake:.1f}% rake)")
-    field_size = min(args.field, contest.entries - 1)
+    field_size = min(args.field or contest.entries - 1, contest.entries - 1)
     field, realised = sample_field(players, settings, field_size, args.seed)
     target = target_ownership(players, settings)
     implied = float((target * players["salary"]).sum())
@@ -175,7 +175,7 @@ def cmd_grade(args) -> None:
 
     print(f"{contest.name}: ${contest.entry_fee:g} entry, {contest.entries:,} entries, "
           f"${contest.prize_pool:,.0f} prizes ({100 * contest.rake:.1f}% rake)")
-    field_size = min(args.field, contest.entries - 1)
+    field_size = min(args.field or contest.entries - 1, contest.entries - 1)
     field, realised = sample_field(players, settings, field_size, args.seed)
     print(f"Grading {len(lineups):,} lineups against {field_size:,} opponent lineups over "
           f"{scores.shape[1]:,} simulated slates...")
@@ -283,7 +283,7 @@ def main(argv=None) -> None:
     p.add_argument("--sampled", type=int, default=200000, help="lineups to sample and screen")
     p.add_argument("--optimizer-lineups", type=int, default=600, help="lineups to build with the optimizer")
     p.add_argument("--finalists", type=int, default=2000, help="top lineups the portfolio is chosen from")
-    p.add_argument("--field", type=int, default=20000, help="opponent lineups to sample")
+    p.add_argument("--field", type=int, help="opponent lineups to sample (default: the whole contest)")
     p.add_argument("--portfolio", type=int, default=150, help="lineups to select")
     p.add_argument("--bankroll", type=float,
                    help="bankroll in dollars the portfolio is sized for (default 20x the entry cost; 0 ignores risk)")
@@ -303,7 +303,7 @@ def main(argv=None) -> None:
     p.add_argument("lineups", help="CSV of lineups: a DraftKings upload/entries file, or nine players per row")
     p.add_argument("simulation", help="simulation.npz written by 'ffsim simulate'")
     p.add_argument("--contest", default="contests/flea_flicker.json")
-    p.add_argument("--field", type=int, default=20000, help="opponent lineups to sample")
+    p.add_argument("--field", type=int, help="opponent lineups to sample (default: the whole contest)")
     p.add_argument("--show", type=int, default=5)
     p.add_argument("--out", default="out/graded_lineups.csv")
     p.add_argument("--config")
