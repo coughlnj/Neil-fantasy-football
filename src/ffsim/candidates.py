@@ -102,7 +102,7 @@ def search_candidates(
         return optimal
 
     sampler_cfg = {
-        "min_salary": cfg["min_salary"], "median_salary": None,
+        "min_salary": cfg["min_salary"],
         "stack_mix": cfg["stack_mix"], "bringback_rate": cfg["bringback_rate"],
         "flex_weight": cfg["flex_weight"],
         "dst_vs_qb_penalty": 1.0 if cfg["allow_dst_vs_qb"] else 0.0,

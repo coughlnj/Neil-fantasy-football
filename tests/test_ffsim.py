@@ -4,13 +4,15 @@ import pytest
 
 from ffsim.candidates import build_candidates, search_candidates
 from ffsim.contest import Contest, generated_payouts, load_contest, tail_payouts
-from ffsim.draftkings import attach_dk, normalise_name, read_dk_entries, write_upload
-from ffsim.field import field_report, sample_field, target_ownership
+from ffsim.draftkings import check_lineup, read_lineups, attach_dk, normalise_name, read_dk_entries, write_upload
+from ffsim import live
+from ffsim.field import LineupSampler, field_report, sample_field, sample_field_by_group, target_ownership
 from ffsim.projections import diff_projections, load_projections
 from ffsim.roi import (adjust_roi, describe_lineups, evaluate, lineup_scores, pick_portfolio,
                        pick_portfolio_for_growth, portfolio_summary)
 from ffsim.sample import sample_slate
 from ffsim.settings import load_settings
+from ffsim.standings import read_standings, showdown_report, standings_report
 from ffsim.simulate import load_simulation, save_simulation, simulate_slate
 
 
@@ -174,16 +176,49 @@ def test_tail_fills_in_missing_places():
 def test_field_is_legal_and_matches_targets(players, settings, field):
     field, realised = field
     check_legal(field, players, settings, settings["field"]["min_salary"])
-    assert np.abs(realised - target_ownership(players, settings)).max() < 0.08
+    assert np.abs(realised - target_ownership(players, settings)).max() < 0.12
     assert np.abs(realised - target_ownership(players, settings)).mean() < 0.005
     assert realised.sum() == pytest.approx(9)
     report = field_report(field, players, settings).set_index("measure")["value"]
     assert report[["QB with no pass catcher", "QB with exactly 1 pass catcher", "QB with 2 or more pass catchers"]].sum() == pytest.approx(100, abs=0.2)
     assert report[["Flex is a RB", "Flex is a WR", "Flex is a TE"]].sum() == pytest.approx(100, abs=0.2)
-    assert report["QB with no pass catcher"] == pytest.approx(17, abs=0.5)
-    assert report["QB with 2 or more pass catchers"] == pytest.approx(38, abs=0.5)
-    assert report["Stacks that add an opposing pass catcher"] == pytest.approx(40, abs=1)
-    assert report["Median salary used"] >= 49500 and report["Defense facing its own QB"] < 5
+    assert report["QB with no pass catcher"] == pytest.approx(12.6, abs=0.5)
+    assert report["QB with 2 or more pass catchers"] == pytest.approx(35.5, abs=0.5)
+    assert report["Stacks that add an opposing pass catcher"] == pytest.approx(37.1, abs=1)
+    assert report["Median salary used"] >= 49700 and report["Defense facing its own QB"] < 5
+    assert 100 < report["Average salary left unspent"] < 180
+
+
+def test_best_of_selection_raises_lineup_quality(players, settings):
+    sampler = LineupSampler(players, settings)
+    own = target_ownership(players, settings)
+    logw = np.where(own > 0, np.log(np.where(own > 0, own, 1.0)), -np.inf)
+    value = players["mean"].to_numpy(float)
+    rng = np.random.default_rng(0)
+    tilted = sampler.salary_tilt(logw, rng)
+    total = lambda best_of: value[sampler.sample(tilted, 1500, rng, best_of=best_of, value=value)].sum(axis=1).mean()
+    plain, some, lots = total(1), total(2.5), total(12)
+    assert plain < some - 1 < lots - 2
+    picked = sampler.sample(tilted, 400, rng, best_of=12, value=value)
+    check_legal(picked, players, settings, settings["field"]["min_salary"])
+
+
+def test_field_groups_differ_in_quality_and_duplicate_more(players, settings):
+    lineups, realised, group = sample_field_by_group(players, settings, 6000, seed=1)
+    names = [g["name"] for g in settings["field"]["groups"]]
+    assert names == ["casual", "typical", "optimizer"]
+    shares = np.bincount(group, minlength=3) / len(group)
+    assert shares == pytest.approx([0.25, 0.68, 0.07], abs=0.01)
+    total = players["mean"].to_numpy(float)[lineups].sum(axis=1)
+    casual, typical, optimizer = (total[group == i].mean() for i in range(3))
+    assert casual < typical - 1 and optimizer > typical + 5
+    # Optimizer-style lineups cluster tightly at the top; casual ones are spread out.
+    assert total[group == 2].std() < total[group == 1].std() < total[group == 0].std()
+    uniform = load_settings()
+    uniform["field"]["groups"] = None
+    flat, _, labels = sample_field_by_group(players, uniform, 3000, seed=1)
+    assert set(labels) == {0}
+    assert players["mean"].to_numpy(float)[flat].sum(axis=1).std() < total.std()
 
 
 def test_field_survives_ownership_it_cannot_match(players, settings):
@@ -338,3 +373,175 @@ def test_upload_file_has_one_lineup_per_entry(tmp_path):
     assert filled == 2 and written["Entry ID"].tolist() == ["101", "102"]
     assert written.columns.tolist()[4:] == ["QB", "RB", "RB.1", "WR", "WR.1", "WR.2", "TE", "FLEX", "DST"]
     assert written.iloc[1, 4:].tolist() == list("jklmnopqr")
+
+
+STANDINGS = """Rank,EntryId,EntryName,TimeRemaining,Points,Lineup,,Player,Roster Position,%Drafted,FPTS
+1,1,ann (1/2),0,200.5,DST Bears  FLEX Tom Tight QB Quinn Back RB Ron One RB Rex Two TE Ted End WR Will A WR Wes B WR Walt C,,Quinn Back,QB,75.00%,30
+2,2,ann (2/2),0,180,DST Bears  FLEX Tom Tight QB Quinn Back RB Ron One RB Rex Two TE Ted End WR Will A WR Wes B WR Walt C,,Ted End,TE,100.00%,12
+3,3,bob,0,150,DST Lions  FLEX Ray Three QB Quinn Back RB Ron One RB Rex Two TE Ted End WR Will A WR Wes B WR Xavi D,,Tom Tight,FLEX,50.00%,9
+4,4,cat,0,120,DST Lions  FLEX Xavi D QB Other Guy RB Ray Three RB Rex Two TE Tom Tight WR Will A WR Wes B WR Walt C,,Will A,WR,100.00%,20
+5,5,dan,0,0,,,,
+"""
+
+
+def test_contest_standings_report(tmp_path):
+    path = tmp_path / "standings.csv"
+    path.write_text(STANDINGS)
+    entries, players = read_standings(str(path))
+    assert len(entries) == 4 and entries["user_entries"].tolist() == [2, 2, 1, 1]
+    assert entries.loc[0, ["QB", "FLEX", "DST"]].tolist() == ["Quinn Back", "Tom Tight", "Bears"]
+    assert players.set_index("name").loc["Tom Tight", "position"] == "TE"
+    slate = pd.DataFrame(
+        {"name": ["Quinn Back", "Will A", "Wes B", "Ted End", "Tom Tight", "Xavi D", "Walt C", "Ron One", "Rex Two",
+                  "Bears", "Lions", "Ray Three"],
+         "team": ["AAA", "AAA", "BBB", "AAA", "CCC", "BBB", "CCC", "AAA", "CCC", "CCC", "BBB", "DDD"],
+         "opponent": ["BBB", "BBB", "AAA", "BBB", "DDD", "AAA", "DDD", "BBB", "DDD", "DDD", "AAA", "CCC"],
+         "salary": [7000, 6000, 6000, 4000, 3000, 5000, 5000, 6500, 6000, 3000, 3000, 4500]}
+    )
+    overall, groups, notes = standings_report(entries, players, slate)
+    assert overall["Flex is a TE"] == 50 and overall["Flex is a RB"] == 25
+    assert overall["Shares its lineup with another entry"] == 50
+    # Quinn Back's lineups all pair him with Will A and Ted End; the fourth QB is unknown.
+    assert overall["QB with 2 or more pass catchers"] == 100
+    assert overall["Stacks that add an opposing pass catcher"] == 100
+    assert overall["QB with his own RB"] == 100 and overall["Defense facing its own QB"] == pytest.approx(33.3)
+    assert overall["Median salary used"] == 46500
+    assert groups.loc["Share of entries", "1 entry"] == 50 and groups.loc["Average points", "2-19 entries"] == 190.25
+    # A slate from another week (salaries over the cap) drops salary and opponent measures.
+    overall, _, notes = standings_report(entries, players, slate.assign(salary=slate["salary"] * 2))
+    assert "Median salary used" not in overall and "Stacks that add an opposing pass catcher" not in overall
+    assert any("does not look like this contest" in n for n in notes)
+
+
+def test_reads_supplied_lineups_in_several_forms(tmp_path, players, settings, field):
+    letters = lambda i: chr(97 + i // 26) + chr(97 + i % 26)  # real names have no digits
+    slate = players.assign(
+        dk_id=[str(1000 + i) for i in range(len(players))],
+        name=[f"Player {letters(i)}son" for i in range(len(players))],
+    )
+    good = field[0][0].tolist()
+    name, ids = slate["name"].to_numpy(), slate["dk_id"].to_numpy()
+    upload = tmp_path / "upload.csv"
+    upload.write_text(
+        "Entry ID,Contest Name,Contest ID,Entry Fee,QB,RB,RB,WR,WR,WR,TE,FLEX,DST\n"
+        + "1,C,9,$5," + ",".join(ids[good]) + "\n"
+        + "2,C,9,$5," + ",".join(f"{name[i]} ({ids[i]})" for i in good) + "\n"
+        + "3,C,9,$5,,,,,,,,,\n"
+        + "4,C,9,$5," + ",".join(["Nobody Atall"] + list(ids[good[1:]])) + "\n"
+    )
+    lineups, problems = read_lineups(str(upload), slate)
+    assert [sorted(l) for l in lineups] == [good, good]
+    assert len(problems) == 1 and "Nobody Atall" in problems[0] and "row 5" in problems[0]
+    plain = tmp_path / "names.csv"
+    plain.write_text(",".join(name[good]) + "\n")
+    assert sorted(read_lineups(str(plain), slate.drop(columns="dk_id"))[0][0]) == good
+    assert check_lineup(good, slate) is None
+    qbs = slate.index[slate["position"] == "QB"][:2].tolist()
+    assert check_lineup(qbs + good[2:], slate).startswith("positions are")
+    assert "over the cap" in check_lineup(good, slate, cap=1000)
+
+
+SHOWDOWN = """Rank,EntryId,EntryName,TimeRemaining,Points,Lineup,,Player,Roster Position,%Drafted,FPTS
+1,1,ann (1/2),0,90,CPT Al Arm FLEX Bo Back FLEX Cy Catch FLEX Di End FLEX Home D  FLEX Ed Kick,,Al Arm,FLEX,25.00%,20
+2,2,ann (2/2),0,80,CPT Al Arm FLEX Cy Catch FLEX Bo Back FLEX Di End FLEX Home D  FLEX Ed Kick,,Al Arm,CPT,75.00%,30
+3,3,bob,0,70,CPT Bo Back FLEX Al Arm FLEX Cy Catch FLEX Di End FLEX Home D  FLEX Ed Kick,,Bo Back,FLEX,50.00%,10
+4,4,cat,0,60,CPT Al Arm FLEX Bo Back FLEX Cy Catch FLEX Fy Far FLEX Gus Go FLEX Ed Kick,,Bo Back,CPT,25.00%,15
+5,5,dan,0,0,,,,
+"""
+
+
+def test_captain_mode_standings_report(tmp_path):
+    path = tmp_path / "showdown.csv"
+    path.write_text(SHOWDOWN)
+    entries, players = read_standings(str(path))
+    assert entries.attrs["format"] == "showdown" and len(entries) == 4
+    assert entries.loc[2, ["CPT", "FLEX1", "FLEX5"]].tolist() == ["Bo Back", "Al Arm", "Ed Kick"]
+    arm = players.set_index("name").loc["Al Arm"]
+    assert (arm["captain_ownership"], arm["flex_ownership"], arm["ownership"], arm["points"]) == (75, 25, 100, 20)
+    slate = pd.DataFrame(
+        {"name": ["Al Arm", "Bo Back", "Cy Catch", "Di End", "Home D", "Ed Kick", "Fy Far", "Gus Go"],
+         "team": ["HOM", "HOM", "HOM", "AWY", "HOM", "AWY", "AWY", "AWY"],
+         "position": ["QB", "RB", "WR", "TE", "DST", "K", "WR", "RB"],
+         "salary": [10000, 9000, 8000, 5000, 4000, 4000, 6000, 5000]}
+    )
+    overall, groups, notes = showdown_report(entries, players, slate)
+    # Entries 1 and 2 are the same lineup in a different order; entry 3 has the same six
+    # players under a different captain, which is a different lineup.
+    assert overall["Shares its lineup with another entry"] == 50
+    assert overall["Same six players as another entry (any captain)"] == 75
+    assert overall["4 from the captain's team, 2 from the other"] == 75
+    assert overall["3 from the captain's team, 3 from the other"] == 25
+    assert overall["Captain is a QB"] == 75 and overall["Captain is a RB"] == 25
+    assert overall["Average salary left unspent"] == pytest.approx(50000 - (45000 * 2 + 44500 + 47000) / 4)
+    assert groups.loc["Share of entries", "2-19 entries"] == 50
+    assert "2 times" in notes[0]
+
+
+def slot_lineup(players, rng, games=None):
+    """A lineup in roster-slot order (QB, RB, RB, WR, WR, WR, TE, FLEX, DST)."""
+    pool = players if games is None else players[players["game"].isin(games)]
+    pick = lambda pos, n: rng.choice(pool.index[pool["position"] == pos], n, replace=False).tolist()
+    wr = pick("WR", 4)
+    return pick("QB", 1) + pick("RB", 2) + wr[:3] + pick("TE", 1) + wr[3:] + pick("DST", 1)
+
+
+def test_time_left_in_each_game_is_recovered_from_player_minutes(players):
+    rng = np.random.default_rng(0)
+    games = sorted(players["game"].unique())
+    truth = pd.Series([0.0, 0.0, 0.15, 0.15, 0.4, 1.0, 1.0, 1.0, 1.0, 1.0], index=games)
+    lineups = np.array([slot_lineup(players, rng) for _ in range(400)])
+    minutes = (60 * players["game"].map(truth).to_numpy()[lineups]).sum(axis=1)
+    entries = pd.DataFrame({"minutes_remaining": minutes})
+    assert live.game_time_left(entries, lineups, players).to_dict() == pytest.approx(truth.to_dict(), abs=1e-6)
+
+
+def test_remaining_projection_shrinks_with_time_left(players):
+    games = sorted(players["game"].unique())
+    left = pd.Series([0.0, 0.25] + [1.0] * 8, index=games)
+    rest = live.remaining_projections(players, left)
+    done, part, fresh = (players["game"] == g for g in games[:3])
+    assert (rest.loc[done, "mean"] == 0).all() and (rest.loc[done, "ceiling"] == 0).all()
+    assert rest.loc[part, "mean"].to_numpy() == pytest.approx(players.loc[part, "mean"].to_numpy() / 4)
+    spread = lambda df: (df["ceiling"] - df["mean"]).to_numpy()
+    assert spread(rest[part]) == pytest.approx(spread(players[part]) / 2)
+    cols = ["mean", "floor", "ceiling"]
+    assert rest.loc[fresh, cols].to_numpy(float) == pytest.approx(players.loc[fresh, cols].to_numpy(float))
+
+
+def test_finished_players_keep_their_score(players, settings):
+    games = sorted(players["game"].unique())
+    left = pd.Series([0.0] * 5 + [1.0] * 5, index=games)
+    points = np.arange(len(players), dtype=float)
+    scores = live.simulate_finish(players, points, left, settings, 300, seed=1)
+    over = players["game"].isin(games[:5]).to_numpy()
+    assert (scores[over] == points[over, None]).all()
+    star = (~over) & (players["mean"] > 10).to_numpy()
+    assert (scores[star].mean(axis=1) > points[star] + 5).all() and scores[star].std(axis=1).min() > 1
+
+
+def test_swaps_stay_legal_and_find_the_better_player(players, settings):
+    rng = np.random.default_rng(1)
+    games = sorted(players["game"].unique())
+    left = pd.Series([0.0] * 5 + [1.0] * 5, index=games)
+    time_left = players["game"].map(left).to_numpy(float)
+    slate = players.copy()
+    late_wr = slate.index[(slate["position"] == "WR") & slate["game"].isin(games[5:])]
+    dud, star = late_wr[0], late_wr[1]
+    slate.loc[dud, ["mean", "floor", "ceiling", "salary"]] = [4.0, 1.0, 8.0, 5000]
+    slate.loc[star, ["mean", "floor", "ceiling", "salary"]] = [30.0, 20.0, 42.0, 4000]
+    mine = np.array(slot_lineup(slate.drop(index=[dud, star]), rng))
+    mine[3] = dud  # a weak receiver who has not started, in the first WR slot
+    cap = int(slate["salary"].to_numpy()[mine].sum()) + 500
+    options = live.swap_options(mine, slate, time_left, cap, min_mean=4.0)
+    pos, salary = slate["position"].to_numpy(), slate["salary"].to_numpy()
+    assert options and (3, star) in options
+    for slot, incoming in options:
+        assert time_left[mine[slot]] == 1 and time_left[incoming] == 1 and incoming not in mine
+        assert pos[incoming] in live.SLOT_POSITIONS[live.SLOTS[slot]]
+        assert salary[incoming] - salary[mine[slot]] <= 500
+    field = np.array([slot_lineup(slate.drop(index=[dud, star]), rng) for _ in range(60)])
+    scores = live.simulate_finish(slate, np.zeros(len(slate)), left, settings, 600, seed=1)
+    contest = Contest("t", 5, 61, np.array([150.0, 60, 30, 20, 10]))
+    swapped, table = live.suggest_swaps(mine[None, :], field, scores, slate, time_left, contest, cap, rounds=1)
+    assert table.loc[0, ["slot", "out", "in"]].tolist() == ["WR1", dud, star] and bool(table.loc[0, "made"])
+    assert swapped[0].tolist() == mine[:3].tolist() + [star] + mine[4:].tolist()

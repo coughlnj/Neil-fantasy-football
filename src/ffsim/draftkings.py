@@ -98,3 +98,54 @@ def write_upload(path: str, entries: pd.DataFrame, lineup_ids: list[list[str]]) 
         for (_, entry), ids in zip(entries.iterrows(), lineup_ids):
             writer.writerow([entry["entry_id"], entry["contest_name"], entry["contest_id"], entry["entry_fee"]] + list(ids))
     return filled
+
+
+def read_lineups(path: str, players: pd.DataFrame) -> tuple[list[list[int]], list[str]]:
+    """Read lineups from a CSV: a DraftKings upload or entries file, or any file whose
+    rows hold nine players. A player may be a DraftKings ID, "Name (ID)" or a name.
+    Returns (lineups as row numbers into `players`, problems found)."""
+    with open(path, encoding="utf-8-sig", newline="") as fh:
+        rows = [r for r in csv.reader(fh) if any(c.strip() for c in r)]
+    header = [c.strip().upper() for c in rows[0]]
+    if "QB" in header and "DST" in header[header.index("QB"):]:
+        first = header.index("QB")
+        cols, rows = list(range(first, header.index("DST", first) + 1)), rows[1:]
+    else:
+        cols = None
+    by_id = {str(v): i for i, v in enumerate(players["dk_id"])} if "dk_id" in players.columns else {}
+    names = players["name"].map(normalise_name)
+    by_name = {k: i for i, k in enumerate(names) if (names == k).sum() == 1}
+
+    def find(cell: str) -> int | None:
+        cell = cell.strip()
+        inside = re.search(r"\((\d+)\)\s*$", cell)
+        for key in (cell, inside.group(1) if inside else None):
+            if key in by_id:
+                return by_id[key]
+        return by_name.get(normalise_name(re.sub(r"\s*\([^)]*\)\s*$", "", cell)))
+
+    lineups, problems = [], []
+    for number, row in enumerate(rows, start=2 if cols else 1):
+        cells = [row[c] for c in cols if c < len(row)] if cols else [c for c in row if c.strip()]
+        cells = [c for c in cells if c.strip()]
+        if not cells:
+            continue  # an entry with no lineup yet
+        found = [find(c) for c in cells]
+        missing = [c.strip() for c, f in zip(cells, found) if f is None]
+        if missing:
+            problems.append(f"row {number}: not in the simulation: {', '.join(missing)}")
+        elif len(found) != 9 or len(set(found)) != 9:
+            problems.append(f"row {number}: expected nine different players, found {len(set(found))}")
+        else:
+            lineups.append(found)
+    return lineups, problems
+
+
+def check_lineup(lineup: list[int], players: pd.DataFrame, cap: int = 50000) -> str | None:
+    """Why a lineup is not a legal DraftKings classic lineup, or None if it is."""
+    pos = players["position"].to_numpy()[lineup]
+    count = {p: int((pos == p).sum()) for p in ("QB", "RB", "WR", "TE", "DST")}
+    if count["QB"] != 1 or count["DST"] != 1 or count["RB"] < 2 or count["WR"] < 3 or count["TE"] < 1:
+        return "positions are " + ", ".join(f"{n} {p}" for p, n in count.items())
+    salary = int(players["salary"].to_numpy()[lineup].sum())
+    return f"salary ${salary:,} is over the cap" if salary > cap else None
