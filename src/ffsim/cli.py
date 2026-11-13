@@ -301,6 +301,22 @@ def cmd_live(args) -> None:
     print(f"\nPer-lineup detail: {os.path.join(args.out_dir, 'live_lineups.csv')}")
 
 
+def cmd_pbp_check(args) -> None:
+    from .pbp import data, models, validate
+
+    plays = data.load_pbp(args.data, args.seasons)
+    model = models.fit_game_model(plays)
+    real = validate.real_box_scores(plays)
+    sim = validate.simulated_box_scores(model, args.sims, args.seed)
+    table, checks = validate.compare(real, sim)
+    print(f"Fitted to {model.summary['plays']:,} plays from {model.summary['games']} games; "
+          f"{len(real):,} real team-games against {args.sims:,} simulated league-average games.\n")
+    print("Per team per game:\n")
+    print(table.to_string())
+    print("\nGame flow:\n")
+    print(checks.to_string())
+
+
 def cmd_field(args) -> None:
     settings = load_settings(args.config)
     players, _ = load_simulation(args.simulation)
@@ -419,6 +435,13 @@ def main(argv=None) -> None:
     p.add_argument("--config")
     p.add_argument("--seed", type=int)
     p.set_defaults(func=cmd_live)
+
+    p = sub.add_parser("pbp-check", help="compare play-by-play simulated games with real ones")
+    p.add_argument("--data", default="data/raw/pbp", help="folder of play-by-play files (scripts/fetch_pbp.py)")
+    p.add_argument("--seasons", type=int, nargs="*", help="seasons to use (default: all downloaded)")
+    p.add_argument("--sims", type=int, default=20000)
+    p.add_argument("--seed", type=int)
+    p.set_defaults(func=cmd_pbp_check)
 
     p = sub.add_parser("dk-slate", help="list the slate and your entries from a DraftKings entries export")
     p.add_argument("entries")

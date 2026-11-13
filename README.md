@@ -184,6 +184,34 @@ Single-game captain-mode contests are read too, with their own measures (duplica
 
 It reports, overall and by how many entries each entrant has: flex use, duplicated lineups, stacking, salary used and average score, plus actual ownership. Compare it with `ffsim field` for the same slate. `--slate` is a CSV with name, team, opponent and salary for that week (the output of `ffsim dk-slate`, or a projections file); without it, stacking and salary are skipped.
 
+## Play-by-play simulator (in progress)
+
+A second simulator is being built that plays each game snap by snap, so that game flow (a trailing team passing more, shootouts) and the box score it produces are realistic by construction. It is not yet connected to the lineup tools, which still use the simulator described above.
+
+```
+python scripts/fetch_pbp.py 2024 2026     # public nflverse play-by-play data, into data/raw/pbp/
+ffsim pbp-check                            # simulated games against real ones
+```
+
+How it works so far:
+
+- **Play calling** is a model of pass or run by down, distance, field position, score and time left, plus fourth-down decisions (go, kick or punt) and field-goal accuracy by distance. All are fitted to the data.
+- **Play results** are drawn from real plays run in a similar situation, so yardage, sacks, turnovers and long plays occur in their real proportions.
+- **The clock** runs off real amounts of time, depending on whether the clock stopped and whether the offence is hurrying or protecting a lead. Halves, overtime, kickoffs, punts, penalties, safeties and returns for touchdowns are all played out.
+
+With no team differences yet (every team league-average), fitted to 2024 through week 10 of 2026:
+
+| Per team per game   | Real  | Simulated |
+|---------------------|-------|-----------|
+| Points              | 22.99 | 22.99     |
+| Plays               | 60.96 | 60.92     |
+| Pass attempts       | 32.37 | 32.43     |
+| Passing yards       | 230.4 | 234.4     |
+| Rushing yards       | 118.3 | 120.4     |
+| Correlation of dropbacks with the opponent's points | 0.34 | 0.37 |
+
+Spreads are a little narrow (points sd 8.9 against 9.9) because every team is identical. Still to build: team strengths, which players get the ball, DraftKings scoring, anchoring each player's average to the projections, and the connection to the lineup tools.
+
 ## Historical results
 
 `python scripts/fetch_rotoguru.py 2017 2025` downloads weekly DraftKings points and salaries per player from RotoGuru into `data/history/dk_results.csv`, for fitting correlations and outcome shapes. It has not been run against the live site: the site is plain HTTP, which the cloud session that wrote it cannot reach.
