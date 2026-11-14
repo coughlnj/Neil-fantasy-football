@@ -99,13 +99,21 @@ def cmd_lineups(args) -> None:
     # Choose the portfolio from the strongest lineups, judged together.
     finalists = np.argsort(-adjusted)[: max(args.finalists, args.portfolio)]
     _, payouts = evaluate(candidates[finalists], field, grade, contest, keep_payouts=True)
-    limits = (args.portfolio, args.max_exposure, args.max_overlap)
+    overrides = {}
+    for item in args.exposure or []:
+        name, _, share = item.rpartition("=")
+        match = players.index[players["name"].str.strip().str.lower() == name.strip().lower()]
+        if len(match) != 1 or not share:
+            raise SystemExit(f"--exposure '{item}': expected NAME=SHARE with a player's exact name, e.g. \"Josh Allen=0.8\"")
+        overrides[int(match[0])] = float(share)
+        print(f"Exposure limit for {players['name'][match[0]].strip()}: {100 * float(share):.0f}%")
+    limits = (args.portfolio, args.max_exposure, args.max_overlap, overrides)
     simple = pick_portfolio(candidates[finalists], adjusted[finalists], *limits)
     bankroll = args.bankroll if args.bankroll is not None else 20 * args.portfolio * contest.entry_fee
     if bankroll > 0:
         chosen = pick_portfolio_for_growth(
             candidates[finalists], payouts, adjusted[finalists], contest.entry_fee, args.portfolio, bankroll,
-            args.max_exposure, args.max_overlap,
+            args.max_exposure, args.max_overlap, overrides,
         )
     else:
         chosen = simple
@@ -416,6 +424,8 @@ def main(argv=None) -> None:
     p.add_argument("--bankroll", type=float,
                    help="bankroll in dollars the portfolio is sized for (default 20x the entry cost; 0 ignores risk)")
     p.add_argument("--max-exposure", type=float, default=0.5, help="largest share of the portfolio one player may take")
+    p.add_argument("--exposure", action="append", metavar="NAME=SHARE",
+                   help="a different exposure limit for one player, e.g. \"Josh Allen=1.0\"; repeatable")
     p.add_argument("--max-overlap", type=int, default=7, help="most players two portfolio lineups may share")
     p.add_argument("--show", type=int, default=10)
     p.add_argument("--out", default="out/lineups.csv")

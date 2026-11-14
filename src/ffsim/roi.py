@@ -112,16 +112,26 @@ def describe_lineups(lineups: np.ndarray, players: pd.DataFrame, field_own: np.n
     return out
 
 
-def pick_portfolio(lineups: np.ndarray, roi: np.ndarray, n: int, max_exposure: float, max_overlap: int) -> np.ndarray:
+def exposure_limits(n: int, max_exposure: float, n_players: int, overrides: dict | None = None) -> np.ndarray:
+    """Most lineups each player may appear in: max_exposure of the set, except for
+    players given their own share in `overrides` (player row number -> share)."""
+    limits = np.full(n_players, max(1, int(np.floor(max_exposure * n + 1e-9))))
+    for player, share in (overrides or {}).items():
+        limits[player] = int(np.floor(share * n + 1e-9))
+    return limits
+
+
+def pick_portfolio(lineups: np.ndarray, roi: np.ndarray, n: int, max_exposure: float, max_overlap: int,
+                   overrides: dict | None = None) -> np.ndarray:
     """Greedily take the best lineups while capping any player's share of the set and
     the number of players two chosen lineups may share."""
-    limit = max(1, int(np.floor(max_exposure * n + 1e-9)))
+    limit = exposure_limits(n, max_exposure, int(lineups.max()) + 1, overrides)
     counts: dict[int, int] = {}
     chosen: list[int] = []
     for i in np.argsort(-roi):
         if len(chosen) >= n:
             break
-        if any(counts.get(p, 0) >= limit for p in lineups[i]):
+        if any(counts.get(p, 0) >= limit[p] for p in lineups[i]):
             continue
         if any(len(np.intersect1d(lineups[i], lineups[j])) > max_overlap for j in chosen):
             continue
@@ -140,6 +150,7 @@ def pick_portfolio_for_growth(
     bankroll: float,
     max_exposure: float,
     max_overlap: int,
+    overrides: dict | None = None,
 ) -> np.ndarray:
     """Choose lineups as a set, to maximise the expected growth of a bankroll.
 
@@ -159,7 +170,7 @@ def pick_portfolio_for_growth(
     base = max(bankroll - n * entry_fee, n * entry_fee)
     winnings = np.zeros(payouts.shape[1], dtype=np.float32)
 
-    limit = max(1, int(np.floor(max_exposure * n + 1e-9)))
+    limit = exposure_limits(n, max_exposure, int(lineups.max()) + 1, overrides)
     membership = np.zeros((len(lineups), lineups.max() + 1), dtype=np.int16)
     membership[np.arange(len(lineups))[:, None], lineups] = 1
     counts = np.zeros(membership.shape[1], dtype=int)

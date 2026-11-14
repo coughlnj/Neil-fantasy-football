@@ -308,6 +308,19 @@ def test_growth_portfolio_respects_limits():
     assert all(len(np.intersect1d(lineups[a], lineups[b])) <= 6 for a in chosen for b in chosen if a != b)
 
 
+def test_one_player_can_have_his_own_exposure_limit():
+    rng = np.random.default_rng(0)
+    lineups = np.array([np.r_[0, rng.choice(np.arange(1, 40), 8, replace=False)] for _ in range(300)])   # player 0 in all
+    payouts = rng.exponential(5, size=(300, 200)).astype(np.float32)
+    roi = 100 * (payouts.mean(axis=1) / 5 - 1)
+    for pick in (lambda **kw: pick_portfolio(lineups, roi, 20, 0.5, 8, **kw),
+                 lambda **kw: pick_portfolio_for_growth(lineups, payouts, roi, 5, 20, 2000, 0.5, 8, **kw)):
+        assert len(pick()) == 10                                    # capped at half by the shared player
+        freed = pick(overrides={0: 1.0})
+        assert len(freed) == 20 and np.bincount(lineups[freed][:, 1:].ravel()).max() <= 10
+        assert len(pick(overrides={0: 0.25})) == 5
+
+
 def test_portfolio_respects_limits():
     lineups = np.array([[0, 1, 2], [0, 1, 3], [0, 4, 5], [6, 7, 8], [0, 7, 9]])
     roi = np.array([5.0, 4.0, 3.0, 2.0, 1.0])

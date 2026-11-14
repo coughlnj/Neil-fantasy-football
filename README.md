@@ -75,6 +75,7 @@ Expected winnings add up across lineups, so taking the top lineups one by one al
 
 - `--bankroll DOLLARS` sets the bankroll (default: 20 times the cost of the entries). A smaller bankroll buys more diversification at the cost of expected ROI; a larger one moves toward the plain top lineups.
 - `--bankroll 0` takes the top lineups one by one.
+- `--exposure "Player Name=1.0"` gives one player his own exposure limit (here, none), leaving the cap on everyone else. Repeat it for more players.
 
 Each run prints both versions side by side: expected ROI, chance of profit, median return, chance of a 5x return, and chance of losing half the entry cost.
 
