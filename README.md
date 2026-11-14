@@ -184,33 +184,37 @@ Single-game captain-mode contests are read too, with their own measures (duplica
 
 It reports, overall and by how many entries each entrant has: flex use, duplicated lineups, stacking, salary used and average score, plus actual ownership. Compare it with `ffsim field` for the same slate. `--slate` is a CSV with name, team, opponent and salary for that week (the output of `ffsim dk-slate`, or a projections file); without it, stacking and salary are skipped.
 
-## Play-by-play simulator (in progress)
+## Play-by-play simulator (experimental)
 
-A second simulator is being built that plays each game snap by snap, so that game flow (a trailing team passing more, shootouts) and the box score it produces are realistic by construction. It is not yet connected to the lineup tools, which still use the simulator described above.
+A second simulator plays each game snap by snap, so that game flow (a trailing team passing more, shootouts) and the box score it produces are realistic by construction. Every passing yard is a receiving yard. It is optional; the default simulator is still the one described above.
 
 ```
-python scripts/fetch_pbp.py 2024 2026     # public nflverse play-by-play data, into data/raw/pbp/
-ffsim pbp-check                            # simulated games against real ones
+python scripts/fetch_pbp.py 2024 2026                              # public nflverse play-by-play data, into data/raw/pbp/
+ffsim pbp-check                                                     # league-average simulated games against real ones
+ffsim simulate projections.csv --dk DKEntries.csv --engine pbp      # a slate, played snap by snap
 ```
 
-How it works so far:
+The output file is the same as the default simulator's, so `lineups`, `grade` and `field` work on it unchanged.
 
-- **Play calling** is a model of pass or run by down, distance, field position, score and time left, plus fourth-down decisions (go, kick or punt) and field-goal accuracy by distance. All are fitted to the data.
+How it works:
+
+- **Play calling** is a model of pass or run by down, distance, field position, score and time left, plus fourth-down decisions (go, kick or punt) and field-goal accuracy by distance. All are fitted to the data. Each team's own lean toward the pass this season is added.
 - **Play results** are drawn from real plays run in a similar situation, so yardage, sacks, turnovers and long plays occur in their real proportions.
 - **The clock** runs off real amounts of time, depending on whether the clock stopped and whether the offence is hurrying or protecting a lead. Halves, overtime, kickoffs, punts, penalties, safeties and returns for touchdowns are all played out.
+- **Players.** Each target and carry goes to a player. A team's split starts from this season's usage (recent games counting most; targets by depth, carries by field zone) and is adjusted, with the offence's overall quality, until the simulated averages are close to the projections. That is how injuries and role changes in the projections carry through.
+- **Scoring** is DraftKings classic, including yardage bonuses and defences.
+- **Anchoring.** Each player's simulated results are finally scaled so his average equals his projection exactly. The spread of his outcomes, and how players move together, come from the simulated games; the supplied floors and ceilings are not used.
 
-With no team differences yet (every team league-average), fitted to 2024 through week 10 of 2026:
+Checks so far:
 
-| Per team per game   | Real  | Simulated |
-|---------------------|-------|-----------|
-| Points              | 22.99 | 22.99     |
-| Plays               | 60.96 | 60.92     |
-| Pass attempts       | 32.37 | 32.43     |
-| Passing yards       | 230.4 | 234.4     |
-| Rushing yards       | 118.3 | 120.4     |
-| Correlation of dropbacks with the opponent's points | 0.34 | 0.37 |
+| Check | Result |
+|-------|--------|
+| League-average games against real ones (points, plays, pass and rush volume) | Within 2% on each |
+| Simulated 10th / 90th percentiles against the provider's floors / ceilings, players projected 10+ | WR 5.5 / 27.4 against 5.4 / 27.9; RB 7.3 / 28.1 against 6.8 / 29.2; QB 9.0 / 26.3 against 8.2 / 26.7 |
+| Simulator's own player averages before anchoring | Within 0.3 points of the projections on average |
+| Opposing QB's extra points when a QB has a top-2% game (real 6.7) | 4.6, against 3.4 for the default simulator |
 
-Spreads are a little narrow (points sd 8.9 against 9.9) because every team is identical. Still to build: team strengths, which players get the ball, DraftKings scoring, anchoring each player's average to the projections, and the connection to the lineup tools.
+Known gaps: it reproduces only part of how strongly both passing games rise together in the most extreme games; every play is independent given the situation, so a team cannot simply be having a great or terrible day; and it has not yet been compared with the default simulator on real contest results.
 
 ## Historical results
 

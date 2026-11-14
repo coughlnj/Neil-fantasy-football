@@ -13,7 +13,7 @@ from . import models as M
 
 STATS = ["points", "plays", "dropbacks", "pass_att", "completions", "pass_yards", "pass_td", "interceptions",
          "sacks", "rush_att", "rush_yards", "rush_td", "fumbles_lost", "fg_att", "fg_made", "punts",
-         "return_td", "safeties", "penalties", "first_downs"]
+         "return_td", "defence_td", "safeties", "penalties", "first_downs"]
 
 
 def simulate_game(model: M.GameModel, n_sims: int, rng: np.random.Generator,
@@ -24,8 +24,9 @@ def simulate_game(model: M.GameModel, n_sims: int, rng: np.random.Generator,
     quality: each offence's edge over the defence it faces, from -1 to 1. A positive
       value sometimes draws two real plays and keeps the better one; negative, the worse.
     pass_shift: added to each offence's pass-or-run log-odds (its lean relative to the league).
-    on_play: optional callback(games, offence, row, gain, scored, kind) called for every
-      batch of scrimmage plays, for attaching player statistics.
+    on_play: optional callback(games, offence, row, gain, scored, is_run, yardline) called
+      for every batch of scrimmage plays, for attaching player statistics. `row` indexes
+      the real plays in model.plays; `yardline` is where the snap was.
 
     Returns the box score: stats[name] has shape (2, n_sims), plus "overtime"."""
     n = n_sims
@@ -197,7 +198,7 @@ def simulate_game(model: M.GameModel, n_sims: int, rng: np.random.Generator,
             add("interceptions", k[lost == 1], t[lost == 1])
             add("fumbles_lost", k[lost == 2], t[lost == 2])
             if on_play is not None:
-                on_play(k, t, row, gain, scored, is_run)
+                on_play(k, t, row, gain, scored, is_run, yl[k].copy())
 
             mode = M.clock_mode(diff[todo], game_sec[todo], half_sec[k])
             stopped = (col["stops_clock"][row] | scored | (lost > 0)).astype(np.int64)
@@ -216,7 +217,7 @@ def simulate_game(model: M.GameModel, n_sims: int, rng: np.random.Generator,
                 after = col["after_turnover"][row][gave]
                 after = np.where(np.isnan(after), 100 - spot[gave], after)
                 change_of_possession(kg[~house], after[~house])
-                add("return_td", kg[house], 1 - tg[house])
+                add("defence_td", kg[house], 1 - tg[house])
                 touchdown(kg[house], 1 - tg[house])
             plain = ~scored & ~safety & ~gave
             kp = k[plain]

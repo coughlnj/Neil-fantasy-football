@@ -6,7 +6,10 @@ import pytest
 
 from ffsim.pbp import models as M
 from ffsim.pbp.engine import simulate_game
+from ffsim.pbp.players import Matchup, defence_points, draftkings_points, player_key, usage_history
+from ffsim.pbp.slate import simulate_slate_pbp, team_pass_lean
 from ffsim.pbp.validate import compare, real_box_scores, simulated_box_scores
+from ffsim.settings import load_settings
 
 REAL_DATA = "data/raw/pbp"
 
@@ -55,7 +58,25 @@ def made_up_plays(n=9000, seed=0) -> pd.DataFrame:
         "extra_point_result": np.where(rng.random(n) < 0.95, "good", "failed"),
         "two_point_conv_result": np.where(rng.random(n) < 0.45, "success", "failure"),
         "posteam_score": 0.0, "defteam_score": 0.0, "home_team": "AAA", "away_team": "BBB",
+        "receiver_player_name": rng.choice(["W.One", "W.Two", "T.End", "R.Back"], n, p=[0.4, 0.3, 0.2, 0.1]),
+        "rusher_player_name": rng.choice(["R.Back", "R.Spare", "Q.Arm"], n, p=[0.7, 0.2, 0.1]),
+        "passer_player_name": "Q.Arm",
     })
+
+
+def made_up_slate() -> pd.DataFrame:
+    rows = []
+    for team, opp in (("AAA", "BBB"), ("BBB", "AAA")):
+        for name, pos, mean in (("Quin Arm", "QB", 19.0), ("Spare Thrower", "QB", 0.2), ("Rex Back", "RB", 15.0),
+                                ("Ron Spare", "RB", 6.0), ("Wes One", "WR", 16.0), ("Will Two", "WR", 10.0),
+                                ("Walt Three", "WR", 5.0), ("Tom End", "TE", 8.0), ("Deep Reserve", "WR", 0.3)):
+            rows.append({"name": f"{name} {team}", "position": pos, "team": team, "opponent": opp, "salary": 5000,
+                         "mean": mean, "floor": mean * 0.4, "ceiling": mean * 1.8})
+        rows.append({"name": f"{team} D", "position": "DST", "team": team, "opponent": opp, "salary": 3000,
+                     "mean": 7.0, "floor": 1.0, "ceiling": 14.0})
+    slate = pd.DataFrame(rows)
+    slate["game"] = "AAA v BBB"
+    return slate
 
 
 @pytest.fixture(scope="module")
@@ -83,7 +104,7 @@ def test_game_adds_up(model):
     for name, values in s.items():
         assert np.isfinite(values).all(), name
         assert "yards" in name or (np.asarray(values) >= 0).all(), name      # yardage can be negative
-    touchdowns = s["pass_td"] + s["rush_td"] + s["return_td"]
+    touchdowns = s["pass_td"] + s["rush_td"] + s["return_td"] + s["defence_td"]
     after = s["points"] - 6 * touchdowns - 3 * s["fg_made"] - 2 * s["safeties"]
     assert (after >= 0).all() and (after <= 2 * touchdowns).all()       # conversions: 0 to 2 per touchdown
     assert (s["completions"] <= s["pass_att"]).all() and (s["fg_made"] <= s["fg_att"]).all()
@@ -105,7 +126,7 @@ def test_better_offence_scores_more_and_a_trailing_team_passes_more(model):
 def test_on_play_sees_every_scrimmage_play(model):
     seen = {"plays": 0, "yards": 0.0}
 
-    def record(games, offence, row, gain, scored, is_run):
+    def record(games, offence, row, gain, scored, is_run, yardline):
         seen["plays"] += len(games)
         complete = model.plays.columns["complete"][row]
         seen["yards"] += float(gain[complete].sum())
@@ -113,6 +134,71 @@ def test_on_play_sees_every_scrimmage_play(model):
     s = simulate_game(model, 500, np.random.default_rng(4), on_play=record)
     assert seen["plays"] == int(s["plays"].sum())
     assert seen["yards"] == pytest.approx(float(s["pass_yards"].sum()))
+
+
+def test_player_names_match_across_sources():
+    pairs = [("Jaxon Smith-Njigba", "J.Smith-Njigba"), ("Kenneth Walker III", "K.Walker"), ("C.J. Stroud", "C.Stroud"),
+             ("Michael Penix Jr.", "M.Penix"), ("Amon-Ra St. Brown", "A.St. Brown"), ("DJ Moore", "D.Moore")]
+    for full, short in pairs:
+        assert player_key(full) == player_key(short), full
+    assert player_key("Josh Allen") != player_key("Keenan Allen")
+
+
+def test_draftkings_scoring():
+    line = lambda **kw: {k: np.array([float(kw.get(k, 0))]) for k in
+                         ["pass_yards", "pass_td", "interceptions", "rush_yards", "rush_td", "receptions", "rec_yards",
+                          "rec_td", "fumbles_lost"]}
+    assert draftkings_points(line(pass_yards=300, pass_td=2, interceptions=1))[0] == pytest.approx(12 + 8 - 1 + 3)
+    assert draftkings_points(line(rush_yards=100, rush_td=1, fumbles_lost=1))[0] == pytest.approx(10 + 6 + 3 - 1)
+    assert draftkings_points(line(receptions=7, rec_yards=99, rec_td=1))[0] == pytest.approx(7 + 9.9 + 6)
+    zero = np.zeros((2, 1), dtype=float)
+    box = {k: zero.copy() for k in ["points", "defence_td", "return_td", "sacks", "interceptions", "fumbles_lost", "safeties"]}
+    box["points"][1], box["sacks"][1], box["interceptions"][1] = 13, 3, 1        # the opponent's offence
+    box["defence_td"][0] = 1
+    assert defence_points(box, 0)[0] == pytest.approx(3 + 2 + 6 + 4)                # 13 allowed is worth 4
+    box["points"][1], box["defence_td"][1] = 7, 1                                   # all seven came off a pick-six
+    assert defence_points(box, 0)[0] == pytest.approx(3 + 2 + 6 + 10)
+
+
+def test_every_passing_yard_is_a_receiving_yard(model):
+    slate = made_up_slate()
+    matchup = Matchup(slate, usage_history(made_up_plays()))
+    points, box, stats = matchup.simulate(model, 2000, np.random.default_rng(1))
+    assert np.isfinite(points).all() and points.shape == (len(slate), 2000)
+    for side in (0, 1):
+        on = matchup.side == side
+        qb = matchup.passer[side]
+        assert slate["name"][qb].startswith("Quin Arm")
+        for thrown, caught in (("pass_yards", "rec_yards"), ("pass_td", "rec_td")):
+            assert stats[thrown][qb] == pytest.approx(stats[caught][on].sum(axis=0))
+            assert stats[thrown][qb] == pytest.approx(box[thrown][side])
+        assert stats["rush_yards"][on].sum(axis=0) == pytest.approx(box["rush_yards"][side], abs=1e-3)
+        assert stats["interceptions"][qb] == pytest.approx(box["interceptions"][side])
+    assert (stats["receptions"][slate["position"] == "QB"] == 0).all()
+
+
+def test_fitting_moves_players_toward_their_projections(model):
+    slate = made_up_slate()
+    matchup = Matchup(slate, usage_history(made_up_plays()))
+    main = (slate["mean"] >= 5) & (slate["position"] != "DST")
+    gap = lambda: np.abs(matchup.simulate(model, 4000, np.random.default_rng(2))[0].mean(axis=1) - slate["mean"])[main].mean()
+    before = gap()
+    matchup.fit(model, rounds=8, n_sims=2000, seed=1)
+    assert gap() < 0.5 * before
+
+
+def test_slate_is_anchored_to_the_projections():
+    slate, settings = made_up_slate(), load_settings()
+    scores, report = simulate_slate_pbp(slate, made_up_plays(), settings, 4000, seed=1)
+    assert scores.shape == (len(slate), 4000) and np.isfinite(scores).all()
+    used = report["from_games"].to_numpy()
+    assert used[(slate["mean"] >= 5).to_numpy()].all()
+    assert scores[used].mean(axis=1) == pytest.approx(slate["mean"].to_numpy()[used], abs=0.15)
+    assert scores[(slate["position"] == "DST").to_numpy()].min() >= settings["lower_bound"]["DST"]
+    qb, wr = 0, 4                                    # a quarterback and his top receiver move together
+    assert np.corrcoef(scores[qb], scores[wr])[0, 1] > 0.15
+    lean = team_pass_lean(made_up_plays(), M.fit_game_model(made_up_plays()))
+    assert set(lean.index) == {"AAA", "BBB"} and lean.abs().max() < 1
 
 
 @pytest.mark.skipif(not os.path.isdir(REAL_DATA), reason="real play-by-play data not downloaded")

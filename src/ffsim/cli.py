@@ -25,8 +25,22 @@ def cmd_simulate(args) -> None:
     settings = load_settings(args.config)
     dk_players = read_dk_entries(args.dk)[1] if args.dk else None
     players = load_projections(args.projections, dk_players, log=print, ownership_column=args.ownership)
-    scores, fit = simulate_slate(players, settings, args.sims, args.seed)
     os.makedirs(args.out, exist_ok=True)
+    if args.engine == "pbp":
+        from .pbp.data import load_pbp
+        from .pbp.slate import simulate_slate_pbp
+
+        scores, report = simulate_slate_pbp(players, load_pbp(args.pbp_data), settings, args.sims, args.seed, log=print)
+        save_simulation(os.path.join(args.out, "simulation.npz"), players, scores)
+        report.to_csv(os.path.join(args.out, "simulation_report.csv"), index=False)
+        used = report[report["from_games"] & (report["mean"] >= 5)]
+        gap = (used["simulator_own_mean"] - used["mean"]).abs()
+        print(f"Played {args.sims:,} slates snap by snap: {len(players)} players, {players['game'].nunique()} games.")
+        print(f"Before anchoring, the simulator's own averages for players projected 5+ were within "
+              f"{gap.mean():.1f} points of the projections on average (largest gap {gap.max():.1f}).")
+        print(f"Saved to {args.out}/simulation.npz and {args.out}/simulation_report.csv")
+        return
+    scores, fit = simulate_slate(players, settings, args.sims, args.seed)
     save_simulation(os.path.join(args.out, "simulation.npz"), players, scores)
     report = fit_report(players, fit, scores, settings)
     report.to_csv(os.path.join(args.out, "simulation_report.csv"), index=False)
@@ -380,6 +394,9 @@ def main(argv=None) -> None:
     p = sub.add_parser("simulate", help="simulate a slate from a projections file")
     p.add_argument("projections")
     p.add_argument("--ownership", help="name of the ownership column to use, if the file has several")
+    p.add_argument("--engine", choices=["classic", "pbp"], default="classic",
+                   help="classic: projection-based; pbp: games played snap by snap (needs play-by-play data)")
+    p.add_argument("--pbp-data", default="data/raw/pbp", help="folder of play-by-play files, for --engine pbp")
     p.add_argument("--dk", help="DraftKings entries export; supplies salaries, games and player IDs")
     p.add_argument("--sims", type=int, default=50000)
     p.add_argument("--out", default="out")
