@@ -20,34 +20,124 @@ SLOT_POSITIONS = {"QB": ["QB"], "RB1": ["RB"], "RB2": ["RB"], "WR1": ["WR"], "WR
                   "TE": ["TE"], "FLEX": ["RB", "WR", "TE"], "DST": ["DST"]}
 
 
+HIDDEN = "LOCKED"          # how a mid-game export shows a player whose game has not started
+MIN_SALARY = {"QB": 4000, "RB": 4000, "WR": 3000, "TE": 2500, "DST": 2000}
+
+
+def add_unlisted_players(entries: pd.DataFrame, slate: pd.DataFrame) -> pd.DataFrame:
+    """Append any player who appears in the standings but not on the slate (a late
+    addition by DraftKings), with no projection and his position taken from his slot."""
+    known = set(slate["name"].map(normalise_name))
+    extra = {}
+    for slot in SLOTS:
+        for name in entries[slot].unique():
+            if name != HIDDEN and normalise_name(name) not in known and name not in extra:
+                extra[name] = SLOT_POSITIONS[slot][0]
+    if not extra:
+        return slate
+    rows = pd.DataFrame({"name": list(extra), "position": list(extra.values()), "team": "UNK", "opponent": "UNK",
+                         "salary": [MIN_SALARY[p] for p in extra.values()], "dk_id": "", "kickoff": "", "game": "unlisted"})
+    return pd.concat([slate, rows], ignore_index=True)
+
+
 def lineup_indices(entries: pd.DataFrame, slate: pd.DataFrame) -> np.ndarray:
-    """Each entry's nine players as row numbers into the slate, in roster-slot order."""
+    """Each entry's nine players as row numbers into the slate, in roster-slot order.
+    A hidden player (game not started) is -1."""
     index = {k: i for i, k in enumerate(slate["name"].map(normalise_name))}
-    cols = [entries[s].map(normalise_name).map(index) for s in SLOTS]
-    out = np.column_stack(cols)
-    if np.isnan(out.astype(float)).any():
-        missing = sorted({n for s, c in zip(SLOTS, cols) for n in entries[s][c.isna()]})
-        raise ValueError("players in the standings are not on the slate: " + ", ".join(missing[:10]))
-    return out.astype(int)
+    cols = []
+    for slot in SLOTS:
+        names = entries[slot]
+        found = names.map(normalise_name).map(index)
+        found = found.where(names != HIDDEN, -1)
+        if found.isna().any():
+            raise ValueError("players in the standings are not on the slate: " + ", ".join(sorted(set(names[found.isna()]))[:10]))
+        cols.append(found.astype(int))
+    return np.column_stack(cols)
 
 
 def game_time_left(entries: pd.DataFrame, lineups: np.ndarray, slate: pd.DataFrame) -> pd.Series:
     """Fraction of each game still to play (1 = not started, 0 = finished).
 
     DraftKings reports each entry's player-minutes remaining: 60 for every player whose
-    game has not started. Across all entries that pins down the minutes left in each game."""
+    game has not started. Across all entries that pins down the minutes left in each
+    game. Hidden players are in games that have not started, so count 60 each."""
     games = slate["game"].to_numpy()
     names = sorted(set(games))
     column = {g: i for i, g in enumerate(names)}
+    game_of = np.vectorize(column.get)(games)
     counts = np.zeros((len(lineups), len(names)))
-    game_idx = np.vectorize(column.get)(games)[lineups]
+    hidden = lineups < 0
     for slot in range(lineups.shape[1]):
-        np.add.at(counts, (np.arange(len(lineups)), game_idx[:, slot]), 1)
-    known = entries["minutes_remaining"].notna().to_numpy()
-    minutes = np.linalg.lstsq(counts[known], entries["minutes_remaining"].to_numpy()[known], rcond=None)[0]
-    left = np.clip(minutes / 60.0, 0.0, 1.0)
+        shown = ~hidden[:, slot]
+        np.add.at(counts, (np.flatnonzero(shown), game_of[lineups[shown, slot]]), 1)
+    minutes = entries["minutes_remaining"].to_numpy(float) - 60.0 * hidden.sum(axis=1)
+    known = ~np.isnan(minutes)
+    played = counts[known].sum(axis=0) > 0
+    fitted = np.full(len(names), 60.0)                      # a game nobody is shown in has not started
+    fitted[played] = np.linalg.lstsq(counts[known][:, played], minutes[known], rcond=None)[0]
+    left = np.clip(fitted / 60.0, 0.0, 1.0)
     left = np.where(left > 0.99, 1.0, np.where(left < 0.01, 0.0, left))  # snap estimation noise
     return pd.Series(left.round(3), index=names)
+
+
+def fill_hidden(lineups: np.ndarray, slate: pd.DataFrame, time_left: np.ndarray, weights: np.ndarray,
+                rng: np.random.Generator, cap: int = 50000, low: int = 48500, stack_boost: float = 4.0) -> np.ndarray:
+    """Guess opponents' hidden players. Each hidden slot gets a not-yet-started player
+    of a position that fits, drawn in proportion to `weights` (projected ownership),
+    favouring pass catchers who share a team with the lineup's quarterback, with no
+    repeats and a total salary between `low` and the cap where that is possible."""
+    out = lineups.copy()
+    pos, team, salary = (slate[c].to_numpy() for c in ("position", "team", "salary"))
+    open_player = (time_left >= 1.0) & (np.nan_to_num(weights) > 0)
+    pools = {}
+    for slot, name in enumerate(SLOTS):
+        cand = np.flatnonzero(open_player & np.isin(pos, SLOT_POSITIONS[name]))
+        pools[slot] = (cand, np.log(weights[cand]))
+    todo = np.flatnonzero((lineups < 0).any(axis=1))
+    for attempt in range(40):
+        if len(todo) == 0:
+            break
+        out[todo] = lineups[todo]
+        for slot in [0, 1, 2, 3, 4, 5, 6, 7, 8]:                 # the quarterback first, so stacks can follow
+            cand, logw = pools[slot]
+            rows = todo[lineups[todo, slot] < 0]
+            if len(rows) == 0 or len(cand) == 0:
+                continue
+            keys = logw[None, :] + rng.gumbel(size=(len(rows), len(cand)))
+            qb = out[rows, 0]
+            if slot >= 3 and slot <= 7:
+                qb_team = np.where(qb >= 0, team[np.maximum(qb, 0)], "")
+                mate = (team[cand][None, :] == qb_team[:, None]) & np.isin(pos[cand], ["WR", "TE"])[None, :]
+                keys += np.log(stack_boost) * mate
+            taken = (out[rows][:, :, None] == cand[None, None, :]).any(axis=1)   # no repeats
+            keys[taken] = -np.inf
+            out[rows, slot] = cand[keys.argmax(axis=1)]
+        total = salary[out[todo]].sum(axis=1)
+        floor = low if attempt < 25 else 0                          # give up on using the whole cap eventually
+        todo = todo[(total > cap) | (total < floor) | (out[todo] < 0).any(axis=1)]
+    return out
+
+
+def match_my_lineups(shown: np.ndarray, uploaded: np.ndarray) -> np.ndarray:
+    """Pair each of my entries in the export (hidden players = -1) with one of the
+    lineups I uploaded that agrees on every visible slot, using each uploaded lineup
+    once where possible. Returns the full lineups; a row stays as shown if nothing fits."""
+    from scipy.optimize import linear_sum_assignment
+
+    fits = np.zeros((len(shown), len(uploaded)), dtype=bool)
+    for i, row in enumerate(shown):
+        visible = row >= 0
+        fits[i] = (uploaded[:, visible] == row[visible]).all(axis=1)
+        if not fits[i].any():      # same players, different slots
+            fits[i] = [set(row[visible]) <= set(u) for u in uploaded]
+    full = shown.copy()
+    rows, cols = linear_sum_assignment(~fits)          # as many agreeing pairs as possible
+    for i, j in zip(rows, cols):
+        if fits[i, j]:
+            full[i] = uploaded[j]
+    for i in np.flatnonzero((full < 0).any(axis=1) & fits.any(axis=1)):   # more entries than lineups: reuse one
+        full[i] = uploaded[np.argmax(fits[i])]
+    return full
 
 
 def remaining_projections(slate: pd.DataFrame, left: pd.Series) -> pd.DataFrame:

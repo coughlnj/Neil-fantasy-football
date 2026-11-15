@@ -171,6 +171,8 @@ It prints, and saves to `out/live/`:
 - **Late swaps:** for each lineup, the best swap among players whose game has not started, in a slot their position fits and within the salary cap. A swap is found on half the simulations and recommended only if it also clearly gains on the other half; the rest are listed as within the noise.
 - **`dk_swap_upload.csv`**: the changed lineups, ready to upload to DraftKings.
 
+DraftKings hides every player whose game has not started, in your lineups as well as opponents'. Pass the lineup file you uploaded with `--my-lineups` so your late-game players are known; entries that no longer match it (edited since) have theirs guessed and get no swap suggestions. Opponents' hidden players are filled in from projected ownership, so figures firm up as games start.
+
 Your lineups are found by the entry IDs in your entries export (or `--user NAME`). A run takes about three minutes; `--sims 20000` is steadier and slower. Limits: a player in a game in progress is projected from his pre-game numbers scaled by time left, not from how his game is going, and swaps only replace a player within his own roster slot.
 
 ## Checking the field against a real contest

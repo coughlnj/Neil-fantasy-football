@@ -558,3 +558,43 @@ def test_swaps_stay_legal_and_find_the_better_player(players, settings):
     swapped, table = live.suggest_swaps(mine[None, :], field, scores, slate, time_left, contest, cap, rounds=1)
     assert table.loc[0, ["slot", "out", "in"]].tolist() == ["WR1", dud, star] and bool(table.loc[0, "made"])
     assert swapped[0].tolist() == mine[:3].tolist() + [star] + mine[4:].tolist()
+
+
+def test_hidden_players_are_handled(players, settings):
+    rng = np.random.default_rng(3)
+    games = sorted(players["game"].unique())
+    truth = pd.Series([0.3] * 6 + [1.0] * 4, index=games)
+    time_left = players["game"].map(truth).to_numpy(float)
+    full = np.array([slot_lineup(players, rng) for _ in range(300)])
+    shown = np.where(time_left[full] >= 1.0, -1, full)                 # late-game players are hidden
+    minutes = (60 * time_left[full]).sum(axis=1)
+    entries = pd.DataFrame({"minutes_remaining": minutes})
+    assert live.game_time_left(entries, shown, players).to_dict() == pytest.approx(truth.to_dict(), abs=1e-6)
+
+    weights = players["ownership"].to_numpy(float)
+    filled = live.fill_hidden(shown, players, time_left, weights, rng)
+    assert (filled >= 0).all() and (filled[shown >= 0] == shown[shown >= 0]).all()
+    pos, salary = players["position"].to_numpy(), players["salary"].to_numpy()
+    for row, was in zip(filled, shown):
+        assert len(set(row)) == 9 and salary[row].sum() <= 50000
+        for slot in np.flatnonzero(was < 0):
+            assert time_left[row[slot]] == 1 and pos[row[slot]] in live.SLOT_POSITIONS[live.SLOTS[slot]]
+
+    # My own entries: matched to the lineups I uploaded by their visible players.
+    mine_full = full[:20]
+    matched = live.match_my_lineups(shown[:20], mine_full[rng.permutation(20)])
+    visible = shown[:20] >= 0
+    assert (matched >= 0).all() and (matched[visible] == shown[:20][visible]).all()
+    # Every uploaded lineup is used exactly once (lineups alike in their visible players may trade places).
+    assert sorted(map(tuple, matched)) == sorted(map(tuple, mine_full))
+    edited = shown[:1].copy()
+    edited[0, np.flatnonzero(edited[0] >= 0)[0]] = int(np.setdiff1d(np.flatnonzero(time_left < 1), full[0])[0])
+    assert (live.match_my_lineups(edited, mine_full)[0] < 0).any()    # an edited lineup matches nothing
+
+
+def test_players_missing_from_the_slate_are_added(players):
+    entries = pd.DataFrame([dict(zip(live.SLOTS, ["Somebody New", "LOCKED"] + ["LOCKED"] * 7))])
+    grown = live.add_unlisted_players(entries, players.assign(dk_id="", kickoff=""))
+    assert len(grown) == len(players) + 1 and grown.iloc[-1][["name", "position", "game"]].tolist() == ["Somebody New", "QB", "unlisted"]
+    idx = live.lineup_indices(entries, grown)
+    assert idx[0, 0] == len(players) and (idx[0, 1:] == -1).all()

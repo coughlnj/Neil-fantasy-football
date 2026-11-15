@@ -234,37 +234,68 @@ def cmd_live(args) -> None:
     contest = load_contest(args.contest)
     my_entries, dk_players = read_dk_entries(args.entries)
     projected = load_projections(args.projections, dk_players)
-    keep = ["dk_id", "mean", "floor", "ceiling"] + (["rush_share"] if "rush_share" in projected.columns else [])
+    keep = ["dk_id", "mean", "floor", "ceiling", "ownership"] + (["rush_share"] if "rush_share" in projected.columns else [])
     slate = dk_players.merge(projected[keep], on="dk_id", how="left")
     slate["game"] = [" v ".join(sorted(pair)) for pair in zip(slate["team"], slate["opponent"])]
 
     entries, scored = read_standings(args.standings)
     if entries.attrs.get("format") != "classic":
         raise SystemExit("The in-game tool handles full-roster contests only.")
+    slate = live.add_unlisted_players(entries, slate)
     lineups = live.lineup_indices(entries, slate)
     points = dict(zip(scored["name"].map(live.normalise_name), scored["points"]))
     live_points = slate["name"].map(live.normalise_name).map(points).fillna(0.0).to_numpy(float)
     left = live.game_time_left(entries, lineups, slate)
+    if "unlisted" in left.index:        # late additions: treat as a game in progress like the others
+        started = left[(left < 1) & (left.index != "unlisted")]
+        left["unlisted"] = float(started.mean()) if len(started) else 0.0
     time_left = slate["game"].map(left).to_numpy(float)
+    hidden_share = float((lineups < 0).mean())
 
     kickoff = slate.groupby("game")["kickoff"].first()
     status = pd.DataFrame({"kickoff": kickoff, "time_left_pct": (100 * left).round(0)}).sort_values(["time_left_pct", "kickoff"])
     print(f"{len(entries):,} entries. Games:\n")
     print(status.to_string())
-    gap = float(np.abs(live_points[lineups].sum(axis=1) - entries["points"]).max())
+    shown_points = np.where(lineups >= 0, live_points[np.maximum(lineups, 0)], 0.0).sum(axis=1)
+    gap = float(np.abs(shown_points - entries["points"]).max())
     if gap > 0.5:
         print(f"\nNote: player scores and entry totals in the file differ by up to {gap:.1f} points.")
 
     mine = entries["entry_id"].isin(set(my_entries["entry_id"])) if not args.user else entries["user"] == args.user
     if not mine.any():
         raise SystemExit("None of your entries are in this contest's standings. Use --user NAME to pick them by username.")
-    unprojected = slate.loc[np.unique(lineups[mine.to_numpy()]), :]
+    unprojected = slate.loc[np.unique(lineups[mine.to_numpy()][lineups[mine.to_numpy()] >= 0]), :]
     unprojected = unprojected[unprojected["mean"].isna() & (unprojected["game"].map(left) > 0)]
     if len(unprojected):
         print("\nNo projection for these players of yours still to play (treated as 0): " + ", ".join(unprojected["name"]))
 
-    scores = live.simulate_finish(slate, live_points, left, settings, args.sims, args.seed)
     my_lineups, field = lineups[mine.to_numpy()], lineups[~mine.to_numpy()]
+    rng = np.random.default_rng(args.seed)
+    guessed = np.zeros(len(my_lineups), dtype=bool)
+    if hidden_share > 0:
+        print(f"\n{100 * hidden_share:.0f}% of roster spots are hidden (players whose games have not started).")
+        weights = slate["ownership"].fillna(0).to_numpy(float) if "ownership" in slate.columns else np.zeros(len(slate))
+        if (my_lineups < 0).any():
+            if not args.my_lineups:
+                raise SystemExit("Your own late-game players are hidden too. Pass the lineup file you uploaded with --my-lineups.")
+            uploaded, problems = read_lineups(args.my_lineups, slate)
+            shown = my_lineups.copy()
+            my_lineups = live.match_my_lineups(shown, np.array(uploaded))
+            guessed = (my_lineups < 0).any(axis=1)
+            print(f"Matched {int((~guessed).sum())} of your {len(my_lineups)} entries to the lineups in {args.my_lineups}.")
+        if guessed.any():
+            ids = entries["entry_id"].to_numpy()[mine.to_numpy()][guessed]
+            print(f"{int(guessed.sum())} of your entries match no lineup in that file (edited since?). Their hidden players are "
+                  "guessed, so treat their figures as rough and no swaps are suggested for them: " + ", ".join(ids))
+            my_lineups[guessed] = live.fill_hidden(my_lineups[guessed], slate, time_left, weights, rng, settings["site"]["salary_cap"])
+        field = live.fill_hidden(field, slate, time_left, weights, rng, settings["site"]["salary_cap"])
+        still = int((field < 0).any(axis=1).sum())
+        if still:
+            print(f"Dropped {still} opponent lineups whose hidden players could not be filled.")
+            field = field[(field >= 0).all(axis=1)]
+        print("Opponents' hidden players are filled in from projected ownership, so the late games are less certain than the early ones.")
+    slate["mean"] = slate["mean"].astype(float)
+    scores = live.simulate_finish(slate, live_points, left, settings, args.sims, args.seed)
     mine_rows = entries[mine.to_numpy()].reset_index(drop=True)
     results = live.grade_live(my_lineups, field, scores, contest)
     rest = live.remaining_projections(slate, left)
@@ -282,6 +313,7 @@ def cmd_live(args) -> None:
     table["top1_pct"] = results["top1_pct"].round(2)
     table["cash_pct"] = results["cash_pct"].round(1)
     table["still_to_start"] = [", ".join(names[l[t]]) for l, t in zip(my_lineups, to_start)]
+    table["late_players_guessed"] = guessed
     os.makedirs(args.out_dir, exist_ok=True)
     table.sort_values("expected_prize", ascending=False).to_csv(os.path.join(args.out_dir, "live_lineups.csv"), index=False)
 
@@ -294,8 +326,13 @@ def cmd_live(args) -> None:
         print(f"\nBest {args.show} by expected prize:\n" + table.sort_values("expected_prize", ascending=False).head(args.show)[show].to_string(index=False))
 
     if args.max_swaps > 0 and to_start.any():
-        swapped, swaps = live.suggest_swaps(my_lineups, field, scores, slate, time_left, contest,
+        sure = np.flatnonzero(~guessed)
+        swapped, swaps = live.suggest_swaps(my_lineups[sure], field, scores, slate, time_left, contest,
                                             settings["site"]["salary_cap"], args.min_projection, args.max_swaps)
+        swaps["lineup"] = sure[swaps["lineup"].to_numpy(int)] if len(swaps) else swaps["lineup"]
+        full = my_lineups.copy()
+        full[sure] = swapped
+        swapped = full
         if swaps.empty:
             print("\nNo late swap improves any lineup.")
         else:
@@ -454,6 +491,7 @@ def main(argv=None) -> None:
     p.add_argument("--projections", required=True, help="latest projections file")
     p.add_argument("--contest", default="contests/flea_flicker.json")
     p.add_argument("--user", help="pick your lineups by DraftKings username instead of by entry ID")
+    p.add_argument("--my-lineups", help="the lineup file you uploaded; needed while your late-game players are hidden")
     p.add_argument("--sims", type=int, default=10000)
     p.add_argument("--max-swaps", type=int, default=2, help="most swaps to suggest per lineup (0 for none)")
     p.add_argument("--min-projection", type=float, default=4.0, help="lowest projection a swap-in may have")
