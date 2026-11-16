@@ -239,3 +239,92 @@ def suggest_swaps(mine: np.ndarray, field: np.ndarray, scores: np.ndarray, slate
         if not made:
             break
     return current, pd.DataFrame(swaps, columns=["lineup", "slot", "out", "in", "gain", "gain_se", "made"])
+
+
+def late_swap(mine: np.ndarray, field: np.ndarray, scores: np.ndarray, slate: pd.DataFrame, time_left: np.ndarray,
+              contest: Contest, cap: int = 50000, min_mean: float = 4.0, per_slot: int = 6, tries: int = 300,
+              confidence: float = 2.0, seed: int | None = None):
+    """Rebuild the part of each lineup that has not started, as a whole.
+
+    Every player whose game has not kicked off may be replaced, several at once, within
+    the salary the lineup has left. That finds moves a one-for-one swap cannot, such as
+    paying down at one position to pay up at another.
+
+    Each open slot's alternatives are first valued on their own, ignoring salary. The
+    best few per slot (and the best player at each lower price, who frees up salary) are then combined,
+    every legal combination is graded on half the simulations, and the best one is
+    checked on the other half. It is adopted only if its gain there exceeds `confidence`
+    standard errors.
+
+    Returns (new lineups, table with one row per player changed). `gain` is the whole
+    lineup's gain in expected prize, repeated on each of its rows."""
+    rng = np.random.default_rng(seed)
+    half = scores.shape[1] // 2
+    search, confirm = scores[:, :half], scores[:, half:]
+    salary = slate["salary"].to_numpy()
+    columns = ["lineup", "slot", "out", "in", "gain", "gain_se", "made", "changes"]
+
+    owner, trial, detail = [], [], []
+    for i, lineup in enumerate(mine):
+        for slot, candidate in swap_options(lineup, slate, time_left, 10**9, min_mean):
+            changed = lineup.copy()
+            changed[slot] = candidate
+            owner.append(i); trial.append(changed); detail.append((slot, candidate))
+    if not trial:
+        return mine.copy(), pd.DataFrame(columns=columns)
+    owner, detail = np.array(owner), np.array(detail)
+    base = grade_live(mine, field, search, contest)["roi_pct"].to_numpy()
+    alone = grade_live(np.array(trial), field, search, contest)["roi_pct"].to_numpy() - base[owner]
+
+    combo_owner, combos = [], []
+    for i, lineup in enumerate(mine):
+        rows = np.flatnonzero(owner == i)
+        if len(rows) == 0:
+            continue
+        shortlists = {}
+        for slot in np.unique(detail[rows, 0]):
+            here = rows[detail[rows, 0] == slot]
+            ranked = here[np.argsort(-alone[here])]
+            # Cheaper players worth having for the salary they free: each one the best at his price or below.
+            cheaper, best_so_far = [], -np.inf
+            for r in sorted((r for r in here if salary[detail[r, 1]] < salary[lineup[slot]]), key=lambda r: (salary[detail[r, 1]], -alone[r])):
+                if alone[r] > best_so_far:
+                    cheaper.append(r); best_so_far = alone[r]
+            keep = dict.fromkeys([int(lineup[slot])] + [int(detail[r, 1]) for r in list(ranked[:per_slot]) + cheaper])
+            shortlists[int(slot)] = list(keep)                 # the current player first
+        slots = list(shortlists)
+        sizes = [len(shortlists[s]) for s in slots]
+        if np.prod(sizes, dtype=float) <= tries:
+            picks = np.array(np.meshgrid(*[np.arange(n) for n in sizes], indexing="ij")).reshape(len(slots), -1).T
+        else:      # too many to list: random combinations, changing about half the open slots each time
+            picks = np.column_stack([np.where(rng.random(tries) < 0.5, 0, rng.integers(0, n, tries)) for n in sizes])
+            picks = np.unique(picks, axis=0)
+        made = np.repeat(lineup[None, :], len(picks), axis=0)
+        for column, slot in enumerate(slots):
+            made[:, slot] = np.array(shortlists[slot])[picks[:, column]]
+        legal = (salary[made].sum(axis=1) <= cap) & (np.sort(made, axis=1)[:, 1:] != np.sort(made, axis=1)[:, :-1]).all(axis=1)
+        legal &= (made != lineup).any(axis=1)
+        combos.append(made[legal]); combo_owner += [i] * int(legal.sum())
+    combos, combo_owner = np.vstack(combos), np.array(combo_owner)
+    if len(combos) == 0:
+        return mine.copy(), pd.DataFrame(columns=columns)
+    gain = grade_live(combos, field, search, contest)["roi_pct"].to_numpy() - base[combo_owner]
+    best = pd.Series(gain).groupby(combo_owner).idxmax().to_numpy()
+    best = best[gain[best] > 0]
+    current, rows = mine.copy(), []
+    if len(best):
+        _, before = grade_live(mine[combo_owner[best]], field, confirm, contest, keep_payouts=True)
+        _, after = grade_live(combos[best], field, confirm, contest, keep_payouts=True)
+        diff = after - before
+        for k, t in enumerate(best):
+            mean_gain, se = float(diff[k].mean()), float(diff[k].std() / np.sqrt(diff.shape[1]))
+            if mean_gain <= 0:
+                continue
+            i, sure = int(combo_owner[t]), mean_gain > confidence * se
+            moved = np.flatnonzero(combos[t] != mine[i])
+            for slot in moved:
+                rows.append({"lineup": i, "slot": SLOTS[slot], "out": int(mine[i][slot]), "in": int(combos[t][slot]),
+                             "gain": mean_gain, "gain_se": se, "made": sure, "changes": len(moved)})
+            if sure:
+                current[i] = combos[t]
+    return current, pd.DataFrame(rows, columns=columns)

@@ -333,8 +333,13 @@ def cmd_live(args) -> None:
 
     if args.max_swaps > 0 and to_start.any():
         sure = np.flatnonzero(~guessed)
-        swapped, swaps = live.suggest_swaps(my_lineups[sure], field, scores, slate, time_left, contest,
-                                            settings["site"]["salary_cap"], args.min_projection, args.max_swaps)
+        if args.swap_mode == "full":
+            swapped, swaps = live.late_swap(my_lineups[sure], field, scores, slate, time_left, contest,
+                                            settings["site"]["salary_cap"], args.min_projection, seed=args.seed)
+        else:
+            swapped, swaps = live.suggest_swaps(my_lineups[sure], field, scores, slate, time_left, contest,
+                                                settings["site"]["salary_cap"], args.min_projection, args.max_swaps)
+            swaps["changes"] = 1
         swaps["lineup"] = sure[swaps["lineup"].to_numpy(int)] if len(swaps) else swaps["lineup"]
         full = my_lineups.copy()
         full[sure] = swapped
@@ -346,16 +351,27 @@ def cmd_live(args) -> None:
             swaps["out_name"], swaps["in_name"] = names[swaps["out"]], names[swaps["in"]]
             swaps["salary_change"] = salary[swaps["in"]] - salary[swaps["out"]]
             swaps = swaps.sort_values(["made", "gain"], ascending=False)
-            cols = ["entry_id", "slot", "out_name", "in_name", "salary_change", "gain", "gain_se", "made"]
+            cols = ["entry_id", "slot", "out_name", "in_name", "salary_change", "changes", "gain", "gain_se", "made"]
             swaps[cols].round(2).to_csv(os.path.join(args.out_dir, "live_swaps.csv"), index=False)
             sure, maybe = swaps[swaps["made"]], swaps[~swaps["made"]]
-            print(f"\n{len(sure)} swaps recommended across {sure['entry_id'].nunique()} lineups, worth ${sure['gain'].sum():,.2f} "
-                  f"in expected prizes. {len(maybe)} more looked better but were within the noise and are left alone.")
+            per_lineup = args.swap_mode == "full"         # full mode: one gain per lineup, repeated on its rows
+            worth = sure.drop_duplicates("entry_id")["gain"].sum() if per_lineup else sure["gain"].sum()
+            left_alone = maybe["entry_id"].nunique() if per_lineup else len(maybe)
+            print(f"\n{len(sure)} player changes recommended across {sure['entry_id'].nunique()} lineups, worth ${worth:,.2f} "
+                  f"in expected prizes. {left_alone} more {'lineups' if per_lineup else 'swaps'} looked better but were within "
+                  "the noise and are left alone.")
+            if per_lineup and len(sure):
+                sizes = sure.drop_duplicates("entry_id")["changes"].value_counts().sort_index()
+                print("Lineups by number of players changed: " + ", ".join(f"{n} changed: {c}" for n, c in sizes.items()))
             if len(sure):
                 with pd.option_context("display.width", 220):
                     print("\nLargest recommended:\n" + sure[cols[:-1]].head(args.show).round(2).to_string(index=False))
                 pairs = sure.groupby(["out_name", "in_name"]).agg(lineups=("gain", "size"), total_gain=("gain", "sum"))
-                print("\nMost common recommended swaps:\n" + pairs.sort_values("total_gain", ascending=False).head(8).round(2).to_string())
+                if per_lineup:       # a lineup's gain belongs to all its changes together
+                    pairs = pairs[["lineups"]].sort_values("lineups", ascending=False)
+                else:
+                    pairs = pairs.sort_values("total_gain", ascending=False)
+                print("\nMost common recommended changes:\n" + pairs.head(10).round(2).to_string())
                 changed = sorted(set(sure["lineup"]))
                 rows = my_entries.set_index("entry_id").reindex(mine_rows["entry_id"].to_numpy()[changed]).reset_index()
                 rows = rows.fillna({"contest_name": contest.name, "contest_id": "", "entry_fee": f"${contest.entry_fee:g}"})
@@ -612,7 +628,9 @@ def main(argv=None) -> None:
     p.add_argument("--user", help="pick your lineups by DraftKings username instead of by entry ID")
     p.add_argument("--my-lineups", help="the lineup file you uploaded; needed while your late-game players are hidden")
     p.add_argument("--sims", type=int, default=10000)
-    p.add_argument("--max-swaps", type=int, default=2, help="most swaps to suggest per lineup (0 for none)")
+    p.add_argument("--swap-mode", choices=["full", "single"], default="full",
+                   help="full: rebuild each lineup's not-yet-started players together; single: one-for-one swaps only")
+    p.add_argument("--max-swaps", type=int, default=2, help="single mode: most swaps per lineup (0 for no swap suggestions at all)")
     p.add_argument("--min-projection", type=float, default=4.0, help="lowest projection a swap-in may have")
     p.add_argument("--show", type=int, default=10)
     p.add_argument("--out-dir", default="out/live")

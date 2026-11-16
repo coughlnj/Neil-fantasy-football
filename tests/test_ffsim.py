@@ -563,6 +563,40 @@ def test_swaps_stay_legal_and_find_the_better_player(players, settings):
     assert swapped[0].tolist() == mine[:3].tolist() + [star] + mine[4:].tolist()
 
 
+def test_full_late_swap_pays_down_to_pay_up(players, settings):
+    rng = np.random.default_rng(1)
+    games = sorted(players["game"].unique())
+    left = pd.Series([0.0] * 5 + [1.0] * 5, index=games)
+    time_left = players["game"].map(left).to_numpy(float)
+    slate = players.copy()
+    late = lambda position: slate.index[(slate["position"] == position) & slate["game"].isin(games[5:])]
+    dud, star = late("WR")[0], late("WR")[1]
+    pricey, bargain = late("RB")[0], late("RB")[1]
+    slate.loc[dud, ["mean", "floor", "ceiling", "salary"]] = [4.0, 1.0, 8.0, 5000]
+    slate.loc[star, ["mean", "floor", "ceiling", "salary"]] = [34.0, 24.0, 46.0, 9000]      # $4,000 more than the dud
+    slate.loc[pricey, ["mean", "floor", "ceiling", "salary"]] = [15.0, 7.0, 24.0, 8000]
+    slate.loc[bargain, ["mean", "floor", "ceiling", "salary"]] = [15.0, 7.0, 24.0, 3500]    # as good, $4,500 less
+    rest = slate.drop(index=[dud, star, pricey, bargain])
+    rest = rest[rest["game"].isin(games[:5])]              # everyone else in the lineup has already played
+    mine = np.array(slot_lineup(rest, rng))
+    mine[3], mine[1] = dud, pricey
+    cap = int(slate["salary"].to_numpy()[mine].sum())       # no salary to spare
+    field = np.array([slot_lineup(rest, rng) for _ in range(60)])
+    so_far = np.where(time_left < 1, slate["mean"].to_numpy(float) * rng.uniform(0.6, 1.4, len(slate)), 0.0)
+    scores = live.simulate_finish(slate, so_far, left, settings, 800, seed=1)
+    contest = Contest("t", 5, 61, np.array([150.0, 60, 30, 20, 10]))
+
+    single, _ = live.suggest_swaps(mine[None, :], field, scores, slate, time_left, contest, cap, rounds=2)
+    assert star not in single[0]                            # one-for-one swaps cannot afford him
+    new, table = live.late_swap(mine[None, :], field, scores, slate, time_left, contest, cap, seed=1)
+    assert new[0][3] == star and new[0][1] != pricey and slate["salary"].to_numpy()[new[0]].sum() <= cap
+    assert len(set(new[0])) == 9 and (new[0][[0, 2, 4, 5, 6, 7, 8]] == mine[[0, 2, 4, 5, 6, 7, 8]]).all()
+    assert table["made"].all() and (table["changes"] == 2).all() and table["gain"].iloc[0] > 0
+    assert set(zip(table["slot"], table["in"])) >= {("WR1", star)}
+    nothing, empty = live.late_swap(mine[None, :], field, scores, slate, np.zeros(len(slate)), contest, cap)
+    assert (nothing == mine).all() and empty.empty          # every game under way: nothing to change
+
+
 def test_hidden_players_are_handled(players, settings):
     rng = np.random.default_rng(3)
     games = sorted(players["game"].unique())
