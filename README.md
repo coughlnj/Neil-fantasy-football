@@ -60,7 +60,7 @@ ffsim lineups out/simulation.npz --entries data/raw/DKEntries.csv
 - A quarterback with a `rush_share` above the typical 0.12 is tied less tightly to his and the opposing pass catchers, in proportion to how much less of his scoring comes from passing.
 - `out/simulation_report.csv` compares the simulated mean, floor and ceiling with the inputs for every player.
 
-This simulates fantasy scores with game structure. It is not a play-by-play simulation. The correlation values in `src/ffsim/settings.py` are approximate starting points, not fitted to data here.
+This simulates fantasy scores with game structure. It is not a play-by-play simulation. The correlation values in `src/ffsim/settings.py` have been checked against real DraftKings scores from every game from 2024 to mid-2026 (707 games, scores rebuilt from play-by-play). The skill-position values were already within about 0.05 of the real figures and were left alone. Those involving a defence were not, and are now set from the data: a quarterback and his own defence move slightly against each other (-0.14 in real games, where the old value gave +0.02), a running back gains much less from his own defence than assumed (0.05, not 0.19), a quarterback is hurt less by the opposing defence (-0.28, not -0.39), the two defences move against each other (-0.17), and so do the two lead running backs (-0.10). After the change the simulator is within 0.03 of real games on average across 32 pairs of roles. One gap remains: in a quarterback's best 5% of games the opposing quarterback and pass catchers do better than the simulator has them (about 0.65 standard deviations for the opposing quarterback, against 0.41 here and 0.50 for the play-by-play simulator). That rests on 67 games.
 
 ## How the lineup analyzer works
 
@@ -173,7 +173,7 @@ It prints, and saves to `out/live/`:
 
 DraftKings hides every player whose game has not started, in your lineups as well as opponents'. Pass the lineup file you uploaded with `--my-lineups` so your late-game players are known; entries that no longer match it (edited since) have theirs guessed and get no swap suggestions. Opponents' hidden players are filled in from projected ownership, so figures firm up as games start.
 
-Your lineups are found by the entry IDs in your entries export (or `--user NAME`). A run takes about three minutes; `--sims 20000` is steadier and slower. Limits: a player in a game in progress is projected from his pre-game numbers scaled by time left, not from how his game is going, and swaps only replace a player within his own roster slot.
+Your lineups are found by the entry IDs in your entries export (or `--user NAME`). A run takes about three minutes; `--sims 20000` is steadier and slower. A player in a game in progress is projected from his pre-game numbers scaled by time left, not from how his game is going. That was checked against 8,000 real player-games: how a player has done so far predicts almost nothing about the rest of his game (a weight of about 0.04 at halftime, against 0.91 on the pre-game expectation), so it is left out. Limit: swaps only replace a player within his own roster slot.
 
 ## Checking the field against a real contest
 

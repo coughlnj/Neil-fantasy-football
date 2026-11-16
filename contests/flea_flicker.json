@@ -1,7 +1,7 @@
 {
   "name": "NFL $500K Flea Flicker [$100K to 1st] ($5, 150-max)",
   "entry_fee": 5,
-  "entries": 118000,
+  "entries": 118850,
   "max_entries": 150,
   "payouts": [
     {"from": 1, "to": 1, "prize": 100000},

@@ -114,7 +114,9 @@ def test_game_correlations(players, sim):
     assert corr("H01 QB1", "H01 WR1") > 0.25
     assert corr("H01 QB1", "A01 QB1") > 0.1
     assert corr("H01 QB1", "A01 DST") < -0.2
-    assert corr("H01 RB1", "H01 DST") > 0.1
+    assert 0.0 < corr("H01 RB1", "H01 DST") < 0.12      # a small link, as measured in real games
+    assert corr("H01 QB1", "H01 DST") < -0.05            # a QB and his own defence move slightly apart
+    assert corr("H01 DST", "A01 DST") < -0.08
     assert abs(corr("H01 QB1", "H02 WR1")) < 0.03
 
 
@@ -160,7 +162,7 @@ def test_sample_contests_load():
 
 def test_flea_flicker_table():
     contest = load_contest("contests/flea_flicker.json")
-    assert contest.entries == 118000 and len(contest.payouts) == 25250
+    assert contest.entries == 118850 and len(contest.payouts) == 25250
     assert contest.payouts[:10].tolist() == [100000, 40000, 20000, 10000, 7500, 5000, 2500, 2500, 1500, 1500]
     assert contest.prize_pool == pytest.approx(500000)
     assert (np.diff(contest.payouts) <= 0).all() and contest.payouts[-1] == 8
