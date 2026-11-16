@@ -282,6 +282,38 @@ def sample_field(players: pd.DataFrame, settings: dict, n: int, seed: int | None
     return lineups, realised
 
 
+def shaken_ownership(players: pd.DataFrame, settings: dict, rng: np.random.Generator) -> np.ndarray:
+    """One plausible version of the real ownership (percent): each player's projected
+    figure moved by a random miss of the size the provider typically makes, with each
+    position's total kept the same."""
+    error = settings["field"]["ownership_error"]
+    own = players["ownership"].fillna(0.0).to_numpy(float)
+    at = np.log(np.clip(own, error["at_pct"][0], error["at_pct"][-1]))
+    sd = np.interp(at, np.log(error["at_pct"]), error["log_sd"])
+    out = own * np.exp(sd * rng.standard_normal(len(own)))
+    pos = players["position"].to_numpy()
+    for p in np.unique(pos):
+        on = pos == p
+        if out[on].sum() > 0:
+            out[on] *= own[on].sum() / out[on].sum()
+    return np.minimum(out, 100.0)
+
+
+def sample_field_scenarios(players: pd.DataFrame, settings: dict, n: int, seed: int | None = None, log=lambda m: None):
+    """Opponent fields for grading: one per ownership scenario (a single field from the
+    projected ownership when scenarios are switched off)."""
+    count = int(settings["field"].get("ownership_scenarios", 1) or 1)
+    if count <= 1 or players["ownership"].isna().all():
+        return [sample_field(players, settings, n, seed)[0]]
+    rng = np.random.default_rng(None if seed is None else seed + 7919)
+    fields = []
+    for k in range(count):
+        version = players.assign(ownership=shaken_ownership(players, settings, rng))
+        fields.append(sample_field(version, settings, n, None if seed is None else seed + 101 * (k + 1))[0])
+        log(f"Ownership scenario {k + 1} of {count}: opponent field sampled.")
+    return fields
+
+
 def field_report(lineups: np.ndarray, players: pd.DataFrame, settings: dict) -> pd.DataFrame:
     """Describe how a set of lineups is built, so it can be compared with real contests."""
     pos, team, opp = (players[c].to_numpy() for c in ("position", "team", "opponent"))

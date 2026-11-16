@@ -115,6 +115,7 @@ def read_lineups(path: str, players: pd.DataFrame) -> tuple[list[list[int]], lis
     by_id = {str(v): i for i, v in enumerate(players["dk_id"])} if "dk_id" in players.columns else {}
     names = players["name"].map(normalise_name)
     by_name = {k: i for i, k in enumerate(names) if (names == k).sum() == 1}
+    by_exact = {str(v).strip(): i for i, v in enumerate(players["name"])}
 
     def find(cell: str) -> int | None:
         cell = cell.strip()
@@ -122,7 +123,8 @@ def read_lineups(path: str, players: pd.DataFrame) -> tuple[list[list[int]], lis
         for key in (cell, inside.group(1) if inside else None):
             if key in by_id:
                 return by_id[key]
-        return by_name.get(normalise_name(re.sub(r"\s*\([^)]*\)\s*$", "", cell)))
+        bare = re.sub(r"\s*\([^)]*\)\s*$", "", cell)
+        return by_exact.get(bare, by_name.get(normalise_name(bare)))
 
     lineups, problems = [], []
     for number, row in enumerate(rows, start=2 if cols else 1):

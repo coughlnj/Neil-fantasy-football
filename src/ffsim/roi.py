@@ -21,7 +21,14 @@ def evaluate(
     keep_payouts: bool = False,
 ):
     """Expected ROI and finish rates for each candidate, over every simulated slate.
-    With keep_payouts, also returns every candidate's prize in every slate."""
+    With keep_payouts, also returns every candidate's prize in every slate.
+
+    `field` is one array of opponent lineups, or a list of equally sized ones (ownership
+    scenarios); the simulated slates are then shared out between them in turn."""
+    fields = [field] if isinstance(field, np.ndarray) else list(field)
+    if len({len(f) for f in fields}) != 1:
+        raise ValueError("opponent fields must all be the same size")
+    field = fields[0]
     n_field, n_sims = len(field), scores.shape[1]
     scale = (contest.entries - 1) / (n_field + 1)
     paid = len(contest.payouts)
@@ -34,9 +41,10 @@ def evaluate(
     dupes = np.zeros(len(candidates))
     payouts = np.zeros((len(candidates), n_sims), dtype=np.float32) if keep_payouts else None
 
-    for start in range(0, n_sims, chunk):
+    chunk = min(chunk, max(1, -(-n_sims // len(fields))))      # every scenario gets its share of slates
+    for turn, start in enumerate(range(0, n_sims, chunk)):
         block = scores[:, start : start + chunk]
-        field_scores = np.sort(lineup_scores(field, block), axis=0)
+        field_scores = np.sort(lineup_scores(fields[turn % len(fields)], block), axis=0)
         cand_scores = lineup_scores(candidates, block)
         for col in range(block.shape[1]):
             left = np.searchsorted(field_scores[:, col], cand_scores[:, col], side="left")

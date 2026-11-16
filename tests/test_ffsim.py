@@ -1,3 +1,4 @@
+import json
 import numpy as np
 import pandas as pd
 import pytest
@@ -600,3 +601,77 @@ def test_players_missing_from_the_slate_are_added(players):
     assert len(grown) == len(players) + 1 and grown.iloc[-1][["name", "position", "game"]].tolist() == ["Somebody New", "QB", "unlisted"]
     idx = live.lineup_indices(entries, grown)
     assert idx[0, 0] == len(players) and (idx[0, 1:] == -1).all()
+
+
+def test_weekly_command_runs_every_step(tmp_path):
+    from ffsim.cli import main
+    from ffsim.sample import sample_slate
+
+    first, second = tmp_path / "wednesday.csv", tmp_path / "thursday.csv"
+    slate = sample_slate(4, seed=3)
+    slate.to_csv(first, index=False)
+    bumped = slate.copy()
+    bumped.loc[0, ["mean", "floor", "ceiling"]] += 3.0
+    bumped.to_csv(second, index=False)
+    mine = tmp_path / "mine.csv"
+    quick = tmp_path / "quick.json"
+    quick.write_text(json.dumps({"field": {**QUICK_FIELD, "ownership_scenarios": 2}}))
+    small = ["--config", str(quick), "--engine", "classic", "--sims", "1500", "--sampled", "3000", "--candidates", "200", "--optimizer-lineups", "30",
+             "--finalists", "100", "--portfolio", "10", "--field", "2000", "--contest", "contests/sample_small_gpp.json",
+             "--archive", str(tmp_path / "kept"), "--seed", "1"]
+    main(["week", str(first), "--out-dir", str(tmp_path / "run1")] + small)
+    portfolio = pd.read_csv(tmp_path / "run1" / "classic" / "portfolio.csv")
+    count = len(portfolio)
+    assert 3 <= count <= 10
+    portfolio[["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE", "FLEX", "DST"]].to_csv(mine, index=False)
+
+    main(["week", str(second), "--out-dir", str(tmp_path / "run2"), "--my-lineups", str(mine)] + small)
+    kept = sorted(p.name for p in (tmp_path / "kept").iterdir())
+    assert len(kept) == 2 and kept[0].endswith("_v1.csv") and kept[1].endswith("_v2.csv")
+    summary = (tmp_path / "run2" / "summary.txt").read_text()
+    assert "1 players' projections moved" in summary and f"Your lineups in mine.csv: {count} graded" in summary
+    main(["week", str(second), "--out-dir", str(tmp_path / "run3")] + small)       # the same file again is not kept twice
+    assert len(list((tmp_path / "kept").iterdir())) == 2
+
+
+QUICK_FIELD = {"calibration_rounds": 1, "calibration_lineups": 1000, "groups": None}
+
+
+def test_ownership_scenarios(players, settings):
+    from ffsim.field import sample_field_scenarios, shaken_ownership
+
+    settings = {**settings, "field": {**settings["field"], **QUICK_FIELD}}
+
+    rng = np.random.default_rng(0)
+    shaken = shaken_ownership(players, settings, rng)
+    own = players["ownership"].to_numpy(float)
+    assert not np.allclose(shaken, own) and (shaken >= 0).all()
+    for position in players["position"].unique():
+        on = (players["position"] == position).to_numpy()
+        assert shaken[on].sum() == pytest.approx(own[on].sum(), rel=1e-6)       # same total per position
+    ratio = np.log(shaken[own > 1] / own[own > 1])
+    assert 0.1 < ratio.std() < 0.7
+    star, scrub = own >= 20, (own > 0.5) & (own < 3)
+    seen = own > 0.5
+    many = np.array([np.log(shaken_ownership(players, settings, rng)[seen] / own[seen]) for _ in range(200)])
+    assert many[:, scrub[seen]].std() > 1.3 * many[:, star[seen]].std()               # popular players are pinned down better
+    fields = sample_field_scenarios(players, settings, 1500, seed=2)
+    assert len(fields) == settings["field"]["ownership_scenarios"] and all(f.shape == (1500, 9) for f in fields)
+    one = sample_field_scenarios(players, {**settings, "field": {**settings["field"], "ownership_scenarios": 1}}, 1500, seed=2)
+    assert len(one) == 1
+
+
+def test_grading_against_several_fields(players, sim, settings):
+    scores, _ = sim
+    settings = {**settings, "field": {**settings["field"], **QUICK_FIELD}}
+    contest = load_contest("contests/sample_small_gpp.json")
+    field, _ = sample_field(players, settings, 1500, seed=3)
+    mine, _ = sample_field(players, settings, 40, seed=4)
+    single = evaluate(mine, field, scores[:, :600], contest)
+    same = evaluate(mine, [field, field, field], scores[:, :600], contest)
+    assert np.allclose(single["roi_pct"], same["roi_pct"]) and np.allclose(single["cash_pct"], same["cash_pct"])
+    other, _ = sample_field(players, settings, 1500, seed=5)
+    mixed = evaluate(mine, [field, other], scores[:, :600], contest)
+    assert not np.allclose(single["roi_pct"], mixed["roi_pct"])
+    with pytest.raises(ValueError):
+        evaluate(mine, [field, other[:100]], scores[:, :600], contest)

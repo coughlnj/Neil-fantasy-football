@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 
 import numpy as np
 import pandas as pd
@@ -11,7 +12,7 @@ from .candidates import search_candidates
 from .contest import load_contest
 from .draftkings import check_lineup, read_dk_entries, read_lineups, write_upload
 from . import live
-from .field import field_report, sample_field, target_ownership
+from .field import field_report, sample_field, sample_field_scenarios, target_ownership
 from .projections import diff_projections, load_projections
 from .sample import sample_slate
 from .roi import (adjust_roi, describe_lineups, evaluate, pick_portfolio, pick_portfolio_for_growth,
@@ -88,8 +89,10 @@ def cmd_lineups(args) -> None:
         players, build, field, contest, settings, args.optimizer_lineups, args.sampled, args.candidates,
         args.seed, log=print,
     )
-    print(f"Grading {len(candidates):,} lineups over {grade.shape[1]:,} simulated slates...")
-    results = evaluate(candidates, field, grade, contest)
+    graders = sample_field_scenarios(players, settings, field_size, args.seed, log=print)
+    print(f"Grading {len(candidates):,} lineups over {grade.shape[1]:,} simulated slates"
+          + (f", shared between {len(graders)} versions of the field's ownership..." if len(graders) > 1 else "..."))
+    results = evaluate(candidates, graders, grade, contest)
     table = describe_lineups(candidates, players, realised)
     slots = table.attrs["slots"]
     adjusted = adjust_roi(results, table[["projection", "total_ownership_pct"]])
@@ -98,7 +101,7 @@ def cmd_lineups(args) -> None:
 
     # Choose the portfolio from the strongest lineups, judged together.
     finalists = np.argsort(-adjusted)[: max(args.finalists, args.portfolio)]
-    _, payouts = evaluate(candidates[finalists], field, grade, contest, keep_payouts=True)
+    _, payouts = evaluate(candidates[finalists], graders, grade, contest, keep_payouts=True)
     overrides = {}
     for item in args.exposure or []:
         name, _, share = item.rpartition("=")
@@ -202,7 +205,10 @@ def cmd_grade(args) -> None:
     field, realised = sample_field(players, settings, field_size, args.seed)
     print(f"Grading {len(lineups):,} lineups against {field_size:,} opponent lineups over "
           f"{scores.shape[1]:,} simulated slates...")
-    results, payouts = evaluate(lineups, field, scores, contest, keep_payouts=True)
+    graders = sample_field_scenarios(players, settings, field_size, args.seed)
+    if len(graders) > 1:
+        print(f"The slates are shared between {len(graders)} versions of the field's ownership.")
+    results, payouts = evaluate(lineups, graders, scores, contest, keep_payouts=True)
     table = describe_lineups(lineups, players, realised)
     adjusted = adjust_roi(results, table[["projection", "total_ownership_pct"]])
     table["adj_roi_pct"] = adjusted.round(2)
@@ -426,6 +432,110 @@ def cmd_contest_report(args) -> None:
         table.to_csv(args.out)
 
 
+def archive_projections(path: str, folder: str, slate_date: str) -> tuple[str, str | None]:
+    """Keep a dated copy of a projections file. Returns (saved copy, the version before it
+    or None). A file identical to the latest saved version is not saved again."""
+    import glob
+    import hashlib
+    import re
+    import shutil
+
+    os.makedirs(folder, exist_ok=True)
+    version = lambda f: int(re.search(r"_v(\d+)\.csv$", f).group(1))
+    earlier = sorted(glob.glob(os.path.join(folder, f"{slate_date}_v*.csv")), key=version)
+    digest = lambda f: hashlib.sha256(open(f, "rb").read()).hexdigest()
+    if earlier and digest(earlier[-1]) == digest(path):
+        return earlier[-1], (earlier[-2] if len(earlier) > 1 else None)
+    saved = os.path.join(folder, f"{slate_date}_v{version(earlier[-1]) + 1 if earlier else 1}.csv")
+    shutil.copyfile(path, saved)
+    return saved, (earlier[-1] if earlier else None)
+
+
+def cmd_week(args) -> None:
+    """The whole weekly run for one projections file."""
+    import contextlib
+    import io
+
+    class Tee(io.TextIOBase):
+        def __init__(self, *streams):
+            self.streams = streams
+
+        def write(self, text):
+            for stream in self.streams:
+                stream.write(text)
+                stream.flush()
+            return len(text)
+
+    os.makedirs(args.out_dir, exist_ok=True)
+    log_path = os.path.join(args.out_dir, "run_log.txt")
+    summary: list[str] = []
+    note = lambda text="": (print(text), summary.append(text))
+    with open(log_path, "w") as log, contextlib.redirect_stdout(Tee(sys.stdout, log)):
+        step = lambda title: print(f"\n{'=' * 8} {title} {'=' * 8}\n")
+        projections = args.projections
+        if args.entries:
+            kickoffs = read_dk_entries(args.entries)[1]["kickoff"].astype(str).str.split().str[0]
+            slate_date = pd.to_datetime(kickoffs.mode().iloc[0]).strftime("%Y-%m-%d")
+        else:
+            slate_date = pd.Timestamp.today().strftime("%Y-%m-%d")
+        previous = args.previous
+        if args.archive:
+            saved, before = archive_projections(projections, args.archive, slate_date)
+            previous = previous or before
+            note(f"Projections kept as {saved}" + (f"; previous version {previous}" if previous else "; first version for this slate"))
+        header = pd.read_csv(projections, nrows=0).columns
+        ownership = args.ownership if any(c.strip().lower() == args.ownership.strip().lower() for c in header) else None
+        if previous:
+            step("What changed since the previous file")
+            moved = diff_projections(load_projections(previous), load_projections(projections), args.min_change)
+            print(moved.round(2).to_string(index=False) if len(moved) else f"No projection moved by {args.min_change} points or more.")
+            note(f"{len(moved)} players' projections moved by {args.min_change:g}+ points since the previous file.")
+
+        engines = ["classic", "pbp"] if args.engine == "both" else [args.engine]
+        if "pbp" in engines and not os.path.isdir(args.pbp_data):
+            engines.remove("pbp")
+            note(f"Skipping the play-by-play simulator: no data in {args.pbp_data} (run scripts/fetch_pbp.py).")
+        common = (["--config", args.config] if args.config else []) + (["--seed", str(args.seed)] if args.seed is not None else [])
+        names = {"classic": "default simulator", "pbp": "play-by-play simulator"}
+        for engine in engines:
+            folder = os.path.join(args.out_dir, engine)
+            sim = os.path.join(folder, "simulation.npz")
+            step(f"Simulating the slate ({names[engine]})")
+            main(["simulate", projections, "--engine", engine, "--pbp-data", args.pbp_data, "--sims", str(args.sims), "--out", folder]
+                 + (["--dk", args.entries] if args.entries else []) + (["--ownership", ownership] if ownership else []) + common)
+            step(f"Building the portfolio ({names[engine]})")
+            build = ["lineups", sim, "--contest", args.contest, "--show", "0", "--out", os.path.join(folder, "lineups.csv"),
+                     "--portfolio-out", os.path.join(folder, "portfolio.csv"), "--upload-out", os.path.join(folder, "dk_upload.csv"),
+                     "--max-exposure", str(args.max_exposure), "--max-overlap", str(args.max_overlap), "--portfolio", str(args.portfolio)]
+            for flag in ("sampled", "candidates", "optimizer_lineups", "finalists", "field", "bankroll", "contest_id"):
+                if getattr(args, flag) is not None:
+                    build += ["--" + flag.replace("_", "-"), str(getattr(args, flag))]
+            for item in args.exposure or []:
+                build += ["--exposure", item]
+            main(build + (["--entries", args.entries] if args.entries else []) + common)
+            picked = pd.read_csv(os.path.join(folder, "portfolio.csv"))
+            slots = picked[["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE", "FLEX", "DST"]].to_numpy().ravel()
+            top = pd.Series(slots).value_counts().head(6)
+            note(f"\n{names[engine].capitalize()}: {len(picked)} lineups, expected ROI {picked['adj_roi_pct'].mean():+.0f}% "
+                 f"(top 1% {picked['top1_pct'].mean():.2f}% of the time, cash {picked['cash_pct'].mean():.0f}%).")
+            note("  Most used: " + ", ".join(f"{name.split(' (')[0]} {100 * count / len(picked):.0f}%" for name, count in top.items()))
+            note(f"  Files: {folder}/portfolio.csv" + (f", {folder}/dk_upload.csv" if args.entries else ""))
+            for number, mine in enumerate(args.my_lineups or [], start=1):
+                step(f"Grading {mine} ({names[engine]})")
+                graded = os.path.join(folder, f"graded_my_lineups_{number}.csv")
+                grade = ["grade", mine, sim, "--contest", args.contest, "--show", "0", "--out", graded]
+                main(grade + (["--field", str(args.field)] if args.field is not None else []) + common)
+                table = pd.read_csv(graded)
+                note(f"  Your lineups in {os.path.basename(mine)}: {len(table)} graded, expected ROI {table['adj_roi_pct'].mean():+.0f}% "
+                     f"(top 1% {table['top1_pct'].mean():.2f}%, cash {table['cash_pct'].mean():.0f}%); {int((table['adj_roi_pct'] > 0).sum())} "
+                     f"positive. Detail: {graded}")
+        step("Summary")
+        print("\n".join(summary))
+    with open(os.path.join(args.out_dir, "summary.txt"), "w") as fh:
+        fh.write("\n".join(summary) + "\n")
+    print(f"\nSummary saved to {os.path.join(args.out_dir, 'summary.txt')}; full output in {log_path}")
+
+
 def cmd_diff(args) -> None:
     moved = diff_projections(load_projections(args.old), load_projections(args.new), args.min_change)
     if moved.empty:
@@ -543,6 +653,33 @@ def main(argv=None) -> None:
     p.add_argument("new")
     p.add_argument("--min-change", type=float, default=0.5)
     p.set_defaults(func=cmd_diff)
+
+    p = sub.add_parser("week", help="the whole weekly run for one projections file: keep it, show what changed, "
+                                    "simulate, build the portfolio and upload file, grade your own lineups")
+    p.add_argument("projections")
+    p.add_argument("--entries", help="DraftKings entries export for the slate (salaries, player IDs, upload file)")
+    p.add_argument("--my-lineups", action="append", help="a lineup file of yours to grade; repeatable")
+    p.add_argument("--engine", choices=["both", "classic", "pbp"], default="both")
+    p.add_argument("--ownership", default="Large Field", help="ownership column to use when the file has it")
+    p.add_argument("--exposure", action="append", metavar="NAME=SHARE", help="exposure limit for one player; repeatable")
+    p.add_argument("--max-exposure", type=float, default=0.5)
+    p.add_argument("--max-overlap", type=int, default=7)
+    p.add_argument("--portfolio", type=int, default=150)
+    p.add_argument("--bankroll", type=float)
+    p.add_argument("--contest", default="contests/flea_flicker.json")
+    p.add_argument("--contest-id")
+    p.add_argument("--sims", type=int, default=50000)
+    p.add_argument("--archive", default="data/raw/projections",
+                   help="folder where a dated copy of each projections file is kept ('' to skip)")
+    p.add_argument("--previous", help="projections file to compare with (default: the last one kept for this slate)")
+    p.add_argument("--min-change", type=float, default=0.5)
+    p.add_argument("--pbp-data", default="data/raw/pbp")
+    p.add_argument("--out-dir", default="out/week")
+    for flag in ("sampled", "candidates", "optimizer-lineups", "finalists", "field"):
+        p.add_argument("--" + flag, type=int, help="as for 'ffsim lineups'")
+    p.add_argument("--config")
+    p.add_argument("--seed", type=int)
+    p.set_defaults(func=cmd_week)
 
     p = sub.add_parser("sample-slate", help="write a made-up slate for trying the tools")
     p.add_argument("out")

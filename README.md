@@ -92,6 +92,8 @@ ROI is only as good as the simulated opponents, so the field is built to hit exp
 | Salary left unspent            | 47% use the whole cap, 23% leave $100, 23% leave $200-400, 7% more (average $137) |
 | Defense facing the lineup's own QB | Rare (about 1%)                             |
 
+**Ownership is treated as an estimate.** The provider's projected ownership misses: across the 8 and 15 November contests, players projected at 1-3% landed about 50% above or below that, narrowing to about 20% for players above 25%, with no lean either way. A lineup's ROI moves by about 20 points across ownership that plausible, so lineups are graded against four opponent fields (`field.ownership_scenarios`), each built from ownership shaken by those amounts, with the simulated slates shared out between them. Tested on both weeks, ranking candidates this way agreed better with their ranking against the real ownership (rank correlation 0.80, against 0.70 from the projected ownership alone). It adds about five minutes to a build. Set it to 1 to grade against the projected ownership as given.
+
 The stacking, bring-back and salary figures are measured from the 8 November 2026 $5 Flea Flicker (118,855 entries), one contest so far.
 
 `ffsim field out/simulation.npz` prints what the sampled field actually looks like on each of these, plus the players whose field ownership is furthest from your projection. Add `--out out/field.csv` to save the lineups.
@@ -186,6 +188,14 @@ ffsim contest-report data/raw/contests/standings.csv --slate that-weeks-slate.cs
 Single-game captain-mode contests are read too, with their own measures (duplicated lineups, and with a slate file, team splits, salary and captain position); the lineup tools themselves only build full-roster lineups.
 
 It reports, overall and by how many entries each entrant has: flex use, duplicated lineups, stacking, salary used and average score, plus actual ownership. Compare it with `ffsim field` for the same slate. `--slate` is a CSV with name, team, opponent and salary for that week (the output of `ffsim dk-slate`, or a projections file); without it, stacking and salary are skipped.
+
+## The weekly run in one command
+
+```
+ffsim week projections.csv --entries DKEntries.csv --my-lineups my_150.csv --exposure "Player Name=1.0"
+```
+
+For one projections file this keeps a dated copy (`data/raw/projections/DATE_vN.csv`), lists whose projection moved since the previous copy, simulates the slate with both simulators, builds a portfolio and DraftKings upload file from each, and grades any lineup files of yours under each. Results go to `out/week/classic/` and `out/week/pbp/`, with a short `summary.txt` and the full output in `run_log.txt`. `--engine classic` or `--engine pbp` runs one simulator only; the portfolio options of `ffsim lineups` (`--max-exposure`, `--exposure`, `--bankroll`, `--portfolio`) apply. Allow roughly 25 minutes for the default simulator and 45 for the play-by-play one.
 
 ## Play-by-play simulator (experimental)
 

@@ -85,6 +85,13 @@ DEFAULTS: dict = {
         # None takes it from the ownership totals per position. When set, ownership is
         # rescaled within each position to fit.
         "flex_split": None,
+        # Projected ownership is an estimate. Lineups are graded against this many opponent
+        # fields, each built from ownership shaken by the provider's typical miss, with the
+        # simulated slates shared out between them. 1 uses the projected ownership as given.
+        "ownership_scenarios": 4,
+        # Size of that miss: spread (sd) of log(actual / projected) at these projected
+        # ownership levels, measured on the 8 and 15 November 2026 Flea Flickers.
+        "ownership_error": {"at_pct": [1.7, 4.3, 8.5, 16.0, 35.0], "log_sd": [0.50, 0.40, 0.31, 0.24, 0.17]},
     },
     # How candidate lineups are built.
     "candidates": {
