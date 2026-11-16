@@ -141,6 +141,7 @@ class Matchup:
         self.factor = np.ones(n)                 # each player's share multiplier, adjusted by fit()
         self.quality = np.zeros(2)
         self.pass_shift = np.zeros(2)
+        self.game_plan_sd = 0.0                  # game-to-game variation in each team's lean toward the pass
 
     def _shares(self):
         """Cumulative share tables: who is targeted (by side and depth), who carries (by side and zone)."""
@@ -203,7 +204,10 @@ class Matchup:
             fumbled = (lost == 2) & (carrier >= 0)
             stats["fumbles_lost"][carrier[fumbled], games[fumbled]] += 1
 
-        box = simulate_game(model, n_sims, rng, tuple(self.quality), tuple(self.pass_shift), on_play)
+        lean = np.repeat(np.asarray(self.pass_shift, dtype=float)[:, None], n_sims, axis=1)
+        if self.game_plan_sd > 0:      # each team's plan for the day: more through the air, or more on the ground
+            lean = lean + self.game_plan_sd * rng.standard_normal((2, n_sims))
+        box = simulate_game(model, n_sims, rng, tuple(self.quality), lean, on_play)
         points = draftkings_points(stats)
         for side in (0, 1):
             for i in np.flatnonzero(self.is_dst & (self.side == side)):

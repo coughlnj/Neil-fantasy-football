@@ -123,6 +123,29 @@ def test_better_offence_scores_more_and_a_trailing_team_passes_more(model):
     assert lean["dropbacks"][0].mean() > lean["dropbacks"][1].mean() + 8
 
 
+def test_each_simulated_game_can_have_its_own_plan(model):
+    n = 8000
+    rng = np.random.default_rng(4)
+    flat = simulate_game(model, n, np.random.default_rng(5))
+    varied = simulate_game(model, n, np.random.default_rng(5), pass_shift=0.5 * rng.standard_normal((2, n)))
+    share = lambda s: (s["dropbacks"] / np.maximum(s["plays"], 1)).std()
+    assert share(varied) > 1.1 * share(flat)                       # the pass-run split swings more...
+    assert varied["points"].mean() == pytest.approx(flat["points"].mean(), rel=0.04)     # ...scoring does not move
+    assert varied["points"].std() == pytest.approx(flat["points"].std(), rel=0.05)
+    good_days = np.vstack([np.full(n, 0.5), np.linspace(-0.9, 0.9, n)])       # quality can differ game by game too
+    s = simulate_game(model, n, np.random.default_rng(6), quality=good_days)
+    assert s["points"][1][n // 2:].mean() > s["points"][1][: n // 2].mean() + 5
+
+
+def test_game_plan_variation_reaches_the_players(model):
+    slate = made_up_slate()
+    matchup = Matchup(slate, usage_history(made_up_plays()))
+    spread = lambda: matchup.simulate(model, 6000, np.random.default_rng(3))[1]["dropbacks"].std()
+    before = spread()
+    matchup.game_plan_sd = 0.6
+    assert spread() > 1.05 * before
+
+
 def test_on_play_sees_every_scrimmage_play(model):
     seen = {"plays": 0, "yards": 0.0}
 
@@ -214,3 +237,20 @@ def test_simulated_games_match_real_league_averages():
         assert table.loc[stat, "sim mean"] == pytest.approx(table.loc[stat, "real mean"], rel=tolerance), stat
     flow = checks.loc["Correlation: dropbacks with opponent's points"]
     assert flow["sim"] > 0.25 and abs(flow["sim"] - flow["real"]) < 0.1
+
+
+@pytest.mark.skipif(not os.path.isdir(REAL_DATA), reason="real play-by-play data not downloaded")
+def test_swings_around_the_betting_line_are_the_right_size():
+    """The guard against overdoing it: scoring must not swing more than real games do."""
+    from ffsim.pbp.data import load_pbp
+    from ffsim.pbp.validate import around_the_line
+
+    plays = load_pbp(REAL_DATA)
+    sd = load_settings()["pbp"]["game_plan_sd"]
+    table = around_the_line(plays, M.fit_game_model(plays), sd, repeats=20, seed=2)
+    real, sim = table["real"], table["sim, with game plan"]
+    assert sim["Share of plays that are dropbacks: spread (sd)"] == pytest.approx(real["Share of plays that are dropbacks: spread (sd)"], abs=0.006)
+    for row in ("Points: spread (sd)", "Game total points: spread around the line (sd)", "Winning margin: spread around the line (sd)"):
+        assert sim[row] == pytest.approx(real[row], rel=0.05), row
+    for row in ("Dropbacks: spread (sd)", "Rushes: spread (sd)", "Passing yards: spread (sd)", "Rushing yards: spread (sd)"):
+        assert sim[row] <= 1.03 * real[row], row            # never wider than real

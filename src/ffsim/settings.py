@@ -99,6 +99,10 @@ DEFAULTS: dict = {
         "bringback_rate": 0.5,
         "flex_weight": {"RB": 1.0, "WR": 1.0, "TE": 0.35},
     },
+    # Play-by-play simulator. game_plan_sd: how much a team's lean toward the pass varies from
+    # one game to the next (in log-odds), beyond what the score and clock explain. Fitted so the
+    # spread of a team's pass share matches real games (see `ffsim pbp-check`). 0 turns it off.
+    "pbp": {"game_plan_sd": 0.25},
 }
 
 

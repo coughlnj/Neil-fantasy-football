@@ -42,6 +42,7 @@ def simulate_slate_pbp(players: pd.DataFrame, plays: pd.DataFrame, settings: dic
         idx = group.index.to_numpy()
         matchup = Matchup(group.reset_index(drop=True), usage)
         matchup.pass_shift = np.array([lean.get(team, 0.0) for team in matchup.teams])
+        matchup.game_plan_sd = float(settings.get("pbp", {}).get("game_plan_sd", 0.0))
         matchup.fit(model, seed=int(rng.integers(1 << 31)))
         points, box, _ = matchup.simulate(model, n_sims, rng)
         scores[idx] = points

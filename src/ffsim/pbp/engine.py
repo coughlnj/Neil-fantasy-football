@@ -23,7 +23,10 @@ def simulate_game(model: M.GameModel, n_sims: int, rng: np.random.Generator,
 
     quality: each offence's edge over the defence it faces, from -1 to 1. A positive
       value sometimes draws two real plays and keeps the better one; negative, the worse.
+      One value per team, or an array of shape (2, n_sims) to give every simulated game
+      its own (how a team's day can go better or worse than expected).
     pass_shift: added to each offence's pass-or-run log-odds (its lean relative to the league).
+      One value per team, or shape (2, n_sims) like quality.
     on_play: optional callback(games, offence, row, gain, scored, is_run, yardline) called
       for every batch of scrimmage plays, for attaching player statistics. `row` indexes
       the real plays in model.plays; `yardline` is where the snap was.
@@ -33,6 +36,11 @@ def simulate_game(model: M.GameModel, n_sims: int, rng: np.random.Generator,
     plays, clock = model.plays, model.clock
     col = plays.columns
     quality, pass_shift = np.asarray(quality, dtype=float), np.asarray(pass_shift, dtype=float)
+    if quality.ndim == 1:
+        quality = np.repeat(quality[:, None], n, axis=1)
+    if pass_shift.ndim == 1:
+        pass_shift = np.repeat(pass_shift[:, None], n, axis=1)
+    quality = np.clip(quality, -0.95, 0.95)
     stats = {name: np.zeros((2, n), dtype=np.float32) for name in STATS}
     score = stats["points"]
 
@@ -162,11 +170,11 @@ def simulate_game(model: M.GameModel, n_sims: int, rng: np.random.Generator,
         # Everything else is a dropback or a run.
         if todo.any():
             k, t = g[todo], off[todo]
-            logit = M.pass_features({key: value[todo] for key, value in sit.items()}) @ model.pass_w + pass_shift[t]
+            logit = M.pass_features({key: value[todo] for key, value in sit.items()}) @ model.pass_w + pass_shift[t, k]
             is_run = (rng.random(len(k)) >= 1.0 / (1.0 + np.exp(-logit))).astype(np.int64)
             bucket = M.bucket_index(is_run, down[k], togo[k], yl[k])
             row = plays.draw(bucket, rng.random(len(k)))
-            q = quality[t]
+            q = quality[t, k]
             if (q != 0).any():      # a second look, kept when it is better (or worse) for the offence
                 other = plays.draw(bucket, rng.random(len(k)))
                 value = lambda r: col["gain"][r] + 25.0 * col["td"][r] - 20.0 * (col["turnover"][r] > 0)

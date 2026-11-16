@@ -374,6 +374,15 @@ def cmd_pbp_check(args) -> None:
     print(table.to_string())
     print("\nGame flow:\n")
     print(checks.to_string())
+    try:
+        sd = float(load_settings(None).get("pbp", {}).get("game_plan_sd", 0.0))
+        swings = validate.around_the_line(plays, model, sd, seed=args.seed)
+    except ValueError as error:
+        print(f"\nSkipping the check against betting lines: {error}.")
+        return
+    print(f"\nHow much games vary around the betting line, with each real game replayed 30 times "
+          f"(game-plan variation {sd:g}):\n")
+    print(swings.to_string())
 
 
 def cmd_field(args) -> None:

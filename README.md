@@ -206,6 +206,7 @@ How it works:
 - **The clock** runs off real amounts of time, depending on whether the clock stopped and whether the offence is hurrying or protecting a lead. Halves, overtime, kickoffs, punts, penalties, safeties and returns for touchdowns are all played out.
 - **Players.** Each target and carry goes to a player. A team's split starts from this season's usage (recent games counting most; targets by depth, carries by field zone) and is adjusted, with the offence's overall quality, until the simulated averages are close to the projections. That is how injuries and role changes in the projections carry through.
 - **Scoring** is DraftKings classic, including yardage bonuses and defences.
+- **Game plans.** A team's lean toward the pass also varies from one game to the next, beyond what the score and clock explain (`pbp.game_plan_sd` in the settings, in log-odds). The size is fitted so the spread of a team's pass share matches real games; it moves volume between the passing and running games without changing how much scoring swings.
 - **Anchoring.** Each player's simulated results are finally scaled so his average equals his projection exactly. The spread of his outcomes, and how players move together, come from the simulated games; the supplied floors and ceilings are not used.
 
 Checks so far:
@@ -217,7 +218,21 @@ Checks so far:
 | Simulator's own player averages before anchoring | Within 0.3 points of the projections on average |
 | Opposing QB's extra points when a QB has a top-2% game (real 6.7) | 4.6, against 3.4 for the default simulator |
 
-Known gaps: it reproduces only part of how strongly both passing games rise together in the most extreme games; every play is independent given the situation, so a team cannot simply be having a great or terrible day; and it has not yet been compared with the default simulator on real contest results.
+`ffsim pbp-check` also replays every real game 30 times at the quality the betting line implied, and compares how much real and simulated games vary around that line (707 games, 2024 to week 10 of 2026):
+
+| Spread (sd) around the line | Real | Simulated, no game plans | Simulated, with game plans |
+|-------|------|------|------|
+| Team points | 8.92 | 8.79 | 8.90 |
+| Game total points | 12.84 | 12.89 | 13.00 |
+| Winning margin | 12.36 | 11.98 | 12.18 |
+| Share of plays that are dropbacks | 0.096 | 0.084 | 0.096 |
+| Dropbacks | 7.90 | 6.87 | 7.46 |
+| Rushes | 6.69 | 6.18 | 6.72 |
+| Passing yards | 66.6 | 60.2 | 62.7 |
+
+Scoring already swings as much as real games do, so there is no general "good day / bad day" effect on an offence's quality: adding one made teams beat the line by 14+ points half again as often as they really do. What was missing was variation in the play mix, which the game plans supply. A test fails if scoring ever swings more than 5% differently from real games, or if volume swings wider than real.
+
+Known gaps: passing yardage still varies a little less than in real games (62.7 against 66.6); every play is independent given the situation; and it has not yet been compared with the default simulator on real contest results.
 
 ## Historical results
 

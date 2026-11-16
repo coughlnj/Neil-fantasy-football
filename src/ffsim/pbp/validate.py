@@ -65,3 +65,60 @@ def compare(real: pd.DataFrame, sim: pd.DataFrame):
         "Correlation: rushes with own lead": both(lambda d: d["rush_att"].corr(d["points"] - d["opp_points"])),
     }
     return table, pd.DataFrame(checks, index=["real", "sim"]).T
+
+
+def around_the_line(plays: pd.DataFrame, model: GameModel, game_plan_sd: float, repeats: int = 30, seed: int | None = None) -> pd.DataFrame:
+    """How much real games vary around what the betting line expected, against the
+    simulator playing the same games (each one `repeats` times) with and without the
+    game-plan variation. This is the check that the simulator's swings are the right size:
+    scoring, and how a team splits its plays between pass and run."""
+    need = {"spread_line", "total_line", "home_team"}
+    if not need <= set(plays.columns) or plays["total_line"].isna().all():
+        raise ValueError("the play-by-play data has no betting lines")
+    rng = np.random.default_rng(seed)
+    lines = plays.drop_duplicates("game_id").set_index("game_id")[["home_team", "spread_line", "total_line"]]
+    box = real_box_scores(plays).reset_index().join(lines, on="game_id").dropna(subset=["total_line", "spread_line"])
+    home = box["posteam"] == box["home_team"]
+    box["implied"] = box["total_line"] / 2 + np.where(home, 0.5, -0.5) * box["spread_line"]
+    box["opp_implied"] = box["total_line"] - box["implied"]
+    box = box[box.groupby("game_id")["posteam"].transform("size") == 2]
+    one, two = box[home[box.index]].set_index("game_id"), box[~home[box.index]].set_index("game_id")
+    two = two.reindex(one.index)
+
+    # The quality each offence needs to average what the line implies.
+    grid = np.linspace(-0.8, 0.8, 5)
+    own, other = zip(*[[simulate_game(model, 4000, rng, quality=(q, 0.0))["points"][side].mean() for side in (0, 1)] for q in grid])
+    a, b, base = np.polyfit(grid, own, 1)[0], np.polyfit(grid, other, 1)[0], float(np.interp(0.0, grid, own))
+    i0, i1 = np.repeat(one["implied"].to_numpy(), repeats), np.repeat(two["implied"].to_numpy(), repeats)
+    det = a * a - b * b
+    quality = np.vstack([a * (i0 - base) - b * (i1 - base), a * (i1 - base) - b * (i0 - base)]) / det
+
+    def spreads(frame: pd.DataFrame, team_season: np.ndarray | None) -> dict:
+        frame = frame.assign(pass_share=frame["dropbacks"] / frame["plays"].clip(lower=1))
+        x = np.column_stack([np.ones(len(frame)), frame["implied"], frame["opp_implied"]])
+        out = {}
+        for label, column in (("Points", "points"), ("Share of plays that are dropbacks", "pass_share"), ("Dropbacks", "dropbacks"),
+                              ("Rushes", "rush_att"), ("Passing yards", "pass_yards"), ("Rushing yards", "rush_yards")):
+            y = frame[column].to_numpy(float)
+            miss = y - x @ np.linalg.lstsq(x, y, rcond=None)[0]
+            if team_season is not None:      # a team's own habits are known beforehand; only its game-to-game swing counts
+                count = pd.Series(team_season).map(pd.Series(team_season).value_counts()).to_numpy()
+                miss = (miss - pd.Series(miss).groupby(team_season).transform("mean").to_numpy()) * np.sqrt(count / np.maximum(count - 1, 1))
+            out[label + ": spread (sd)"] = miss.std()
+        miss = (frame["points"] - frame["implied"]).to_numpy()
+        half = len(frame) // 2
+        out["Game total points: spread around the line (sd)"] = (miss[:half] + miss[half:]).std()
+        out["Winning margin: spread around the line (sd)"] = (miss[:half] - miss[half:]).std()
+        out["Teams 14+ points over the line (%)"] = 100 * (miss >= 14).mean()
+        out["Teams 14+ points under the line (%)"] = 100 * (miss <= -14).mean()
+        out["Teams passing for 350+ (%)"] = 100 * (frame["pass_yards"] >= 350).mean()
+        return out
+
+    real = pd.concat([one.reset_index(), two.reset_index()], ignore_index=True)
+    table = {"real": spreads(real, (real["posteam"] + real["game_id"].str[:4]).to_numpy())}
+    for label, sd in (("sim, no game plan", 0.0), ("sim, with game plan", game_plan_sd)):
+        stats = simulate_game(model, len(i0), rng, quality=quality, pass_shift=sd * rng.standard_normal(quality.shape))
+        sim = pd.DataFrame({c: np.concatenate([stats[c][0], stats[c][1]]) for c in BOX})
+        sim["implied"], sim["opp_implied"] = np.concatenate([i0, i1]), np.concatenate([i1, i0])
+        table[label] = spreads(sim, None)
+    return pd.DataFrame(table).round(3)

@@ -16,7 +16,7 @@ COLUMNS = [
     "passer_player_id", "passer_player_name", "receiver_player_id", "receiver_player_name", "rusher_player_id",
     "rusher_player_name", "penalty", "penalty_team", "penalty_yards", "first_down_penalty", "first_down",
     "field_goal_result", "kick_distance", "extra_point_result", "two_point_attempt", "two_point_conv_result",
-    "touchback", "out_of_bounds", "timeout", "epa",
+    "touchback", "out_of_bounds", "timeout", "epa", "spread_line", "total_line",
 ]
 
 
