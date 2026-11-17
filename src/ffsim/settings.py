@@ -63,20 +63,29 @@ DEFAULTS: dict = {
             "none": 0.126, "single": 0.351, "single_bringback": 0.168,
             "double": 0.199, "double_bringback": 0.156,
         },
-        # Kinds of builder in the field, tuned so the simulated field's spread of lineup
-        # quality and its duplicated lineups match that contest. Each has its share of
-        # entries, its stack types (same order as stack_classes), a sharpness (below 1
-        # spreads picks toward less popular players) and best_of (each lineup is the
-        # highest-projected of that many draws; high values behave like an optimizer,
-        # and produce the duplicates). Set to None for a single uniform field.
+        # Kinds of builder in the field. Each has its share of entries, its stack types
+        # (same order as stack_classes), a sharpness (below 1 spreads picks toward less
+        # popular players) and best_of (each lineup is the highest-projected of that many
+        # draws; high values behave like an optimizer, and produce the duplicates). Fitted
+        # on the 8 and 15 November contests, with each field built from that week's actual
+        # ownership, to their spread of lineup quality, spread of lineup ownership and
+        # duplicated lineups. Set to None for a single uniform field.
         "groups": [
-            {"name": "casual", "share": 0.25, "sharpness": 0.2, "best_of": 1,
+            {"name": "casual", "share": 0.25, "sharpness": 0.4, "best_of": 1,
              "stack_classes": [0.298, 0.424, 0.109, 0.117, 0.052]},
-            {"name": "typical", "share": 0.68, "sharpness": 1.0, "best_of": 1,
+            {"name": "typical", "share": 0.65, "sharpness": 1.0, "best_of": 1,
              "stack_classes": [0.071, 0.327, 0.187, 0.224, 0.19]},
-            {"name": "optimizer", "share": 0.07, "sharpness": 1.0, "best_of": 40,
+            {"name": "optimizer", "share": 0.10, "sharpness": 1.0, "best_of": 40,
              "stack_classes": [0.048, 0.321, 0.190, 0.245, 0.196]},
         ],
+        # How entrants build around games, as multipliers on a player's chance of being
+        # picked (1 = no effect). Fitted to the same two contests: real lineups put a
+        # player against their own defense in 8% of entries (20% before this was added),
+        # pair a running back with his own defense in 16%, with his quarterback in 18%,
+        # with the opposing quarterback in 19%, and three pass catchers with the
+        # quarterback in 2%.
+        "pairing": {"player_facing_dst": 0.24, "rb_with_own_dst": 2.0, "rb_with_qb": 1.75,
+                    "rb_facing_qb": 2.2, "third_pass_catcher": 2.2},
         "dst_vs_qb_penalty": 0.2,  # weight multiplier for a DST facing the lineup's QB
         "flex_weight": {"RB": 1.0, "WR": 1.0, "TE": 0.35},
         "calibration_rounds": 12,

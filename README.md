@@ -94,34 +94,40 @@ ROI is only as good as the simulated opponents, so the field is built to hit exp
 
 **Ownership is treated as an estimate.** The provider's projected ownership misses: across the 8 and 15 November contests, players projected at 1-3% landed about 50% above or below that, narrowing to about 20% for players above 25%, with no lean either way. A lineup's ROI moves by about 20 points across ownership that plausible, so lineups are graded against four opponent fields (`field.ownership_scenarios`), each built from ownership shaken by those amounts, with the simulated slates shared out between them. Tested on both weeks, ranking candidates this way agreed better with their ranking against the real ownership (rank correlation 0.80, against 0.70 from the projected ownership alone). It adds about five minutes to a build. Set it to 1 to grade against the projected ownership as given.
 
-The stacking, bring-back and salary figures are measured from the 8 November 2026 $5 Flea Flicker (118,855 entries), one contest so far.
+The stacking, bring-back and salary figures are measured from the 8 November 2026 $5 Flea Flicker (118,855 entries) and held up on the 15 November one.
 
 `ffsim field out/simulation.npz` prints what the sampled field actually looks like on each of these, plus the players whose field ownership is furthest from your projection. Add `--out out/field.csv` to save the lineups.
 
 Ownership and stacking targets can conflict (a 30%-owned quarterback forces ownership onto their receivers); when they do, the stack mix wins and the report shows the ownership gap.
 
-The field is also made of three kinds of builder, tuned by replaying that contest so the simulated field's spread of lineup quality and its duplicated lineups match the real one:
+The field is also made of three kinds of builder, and builds around games the way real entrants do. Both were fitted on the 8 and 15 November contests, with each week's field built from that week's actual ownership so the provider's ownership misses do not get in the way:
 
 | Builder   | Share | How they build                                                        |
 |-----------|-------|-----------------------------------------------------------------------|
 | Casual    | 25%   | Loosely tied to ownership, more off-the-board players, fewer stacks   |
-| Typical   | 68%   | Follows ownership                                                     |
-| Optimizer | 7%    | Each lineup is the highest-projected of 40 draws; these are the lineups that get duplicated |
+| Typical   | 65%   | Follows ownership                                                     |
+| Optimizer | 10%   | Each lineup is the highest-projected of 40 draws; these are the lineups that get duplicated |
 
-Replayed at full size (118,855 lineups), the simulated field against the real one:
+Building around games (`field.pairing`): a player facing the lineup's own defense is about a quarter as likely to be picked, and running backs are about twice as likely when they play for the lineup's defense, its quarterback or the quarterback's opponent. A third pass catcher in a double stack is also favoured. Without these the field put a player against its own defense in 21% of lineups (real: 8%) and a running back with his own defense in 9-12% (real: 15-18%).
 
-| Measure                                         | Real  | Simulated |
-|-------------------------------------------------|-------|-----------|
-| Shares its lineup with another entry            | 8.5%  | 7.0%      |
-| Duplicated share, top tenth by projection       | 39.2% | 43.7%     |
-| Spread (sd) of projected lineup totals          | 7.92  | 7.79      |
-| Projected total, 1st / 99th percentile vs average | -21.6 / +14.6 | -20.1 / +13.8 |
+Replayed at full size, the simulated field against the real one:
+
+| Measure | Nov 8 real | Nov 8 simulated | Nov 15 real | Nov 15 simulated |
+|---|---|---|---|---|
+| A player facing own defense | 8.2% | 7.8% | 8.4% | 8.6% |
+| RB with own defense | 18.2% | 19.1% | 14.6% | 14.2% |
+| QB with own RB / opposing RB | 16.1% / 18.2% | 14.9% / 18.2% | 19.7% / 19.1% | 21.1% / 18.4% |
+| Spread (sd) of projected lineup totals | 7.42 | 7.03 | 8.33 | 8.36 |
+| Spread (sd) of lineup ownership (sum of log ownership) | 3.49 | 3.56 | 3.31 | 3.57 |
+| Shares its lineup with another entry | 8.5% | 5.4% | 9.6% | 9.6% |
+| Cash line / top 1% (scored on real results) | 138.6 / 174.3 | 139.0 / 175.8 | 180.3 / 229.4 | 179.3 / 225.3 |
 
 Known gaps:
 
-- **One contest.** Everything above is fitted to a single week, so it has not yet been tested on a contest it was not tuned to.
-- **Flex split follows the ownership projections**, which that week overstated running backs and understated receivers (simulated flex 59% RB / 9% WR; real 40% / 24%).
-- **No repeated entries.** Some real entrants enter one lineup many times (up to 150); the simulated field does not.
+- **Two contests.** Everything above is fitted to two weeks.
+- **Flex split follows the ownership projections.** With actual ownership it matches; when the provider overstates running backs, so does the field.
+- **No repeated entries.** Some real entrants enter one lineup many times (one entered the same lineup 150 times on 8 November); the simulated field does not, which is part of why it has fewer duplicates that week.
+- **The top end depends on the week.** When one game turns into a shootout, the real field has more lineups built around it than the simulated one (15 November: top 1% at 229.4 real, 225 simulated); on 8 November the simulated top end was slightly higher.
 
 Output columns worth knowing:
 

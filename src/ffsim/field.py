@@ -9,7 +9,8 @@ class LineupSampler:
     """Draws many DraftKings classic lineups at once, weighted per player.
 
     Lineups favour pass catchers who share a team with the quarterback (stacks), avoid a
-    defense facing that quarterback, and must land inside a salary window.
+    defense facing that quarterback (and, more mildly, any player facing their defense),
+    lean toward running backs tied to the lineup's games, and must land inside a salary window.
     """
 
     def __init__(self, players: pd.DataFrame, settings: dict, cfg: dict | None = None):
@@ -40,6 +41,10 @@ class LineupSampler:
             )
         self.class_target = self.class_target / self.class_target.sum()
         self.flex_bonus = {p: np.log(self.cfg["flex_weight"][p]) for p in ("RB", "WR", "TE")}
+        # How entrants build around games (weights multiply a player's chance; 1 = no effect).
+        pairing = {"player_facing_dst": 1.0, "rb_with_own_dst": 1.0, "rb_with_qb": 1.0, "rb_facing_qb": 1.0,
+                   "third_pass_catcher": 1.0, **(self.cfg.get("pairing") or {})}
+        self.pair_log = {k: float(np.log(max(v, 1e-12))) for k, v in pairing.items()}
 
     def _draw(self, logw: np.ndarray, kind: np.ndarray, rng: np.random.Generator):
         """Draw one lineup per entry of `kind` (the stack type to aim for). Returns the
@@ -75,6 +80,20 @@ class LineupSampler:
         penalty = np.log(max(self.cfg["dst_vs_qb_penalty"], 1e-12))
         k = keys("DST") + np.where(self.opp[dst_idx][None, :] == q_team, penalty, 0.0)
         dst = dst_idx[k.argmax(axis=1)]
+
+        # Players built around the games already chosen: away from those facing the
+        # defense; running backs toward the defense's team and the quarterback's game;
+        # in a double stack, a third pass catcher from the quarterback's team.
+        skill = np.concatenate([self.idx[p] for p in ("RB", "WR", "TE")])
+        d_team = self.team[dst][:, None]
+        pl = self.pair_log
+        adjust[rows, skill[None, :]] += np.where(self.opp[skill][None, :] == d_team, pl["player_facing_dst"], 0.0)
+        rb = self.idx["RB"]
+        rb_team = self.team[rb][None, :]
+        adjust[rows, rb[None, :]] += (np.where(rb_team == d_team, pl["rb_with_own_dst"], 0.0)
+                                      + np.where(rb_team == q_team, pl["rb_with_qb"], 0.0)
+                                      + np.where(rb_team == q_opp, pl["rb_facing_qb"], 0.0))
+        adjust[rows, c_idx[None, :]] += np.where(mate & (kind >= 3)[:, None], pl["third_pass_catcher"], 0.0)
 
         picks, pools = [qb[:, None]], []
         for position, count in (("RB", 2), ("WR", 3), ("TE", 1)):
