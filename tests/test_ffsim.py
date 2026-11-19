@@ -760,3 +760,29 @@ def test_short_portfolio_is_topped_up(tmp_path, capsys):
         lambda row: row.str.startswith(name + " (")).any(axis=1)
     assert len(picked) == 20 and with_star.sum() <= 10
     assert "Searching for lineups without them" in capsys.readouterr().out      # the top-up was needed
+
+
+def test_a_player_can_be_left_out(tmp_path, capsys):
+    from ffsim.cli import main
+    from ffsim.sample import sample_slate
+
+    slate = sample_slate(8, seed=3)
+    star = slate.index[slate["position"] == "WR"][3]
+    slate.loc[star, ["salary", "mean", "floor", "ceiling", "ownership"]] = [3000, 30.0, 18.0, 44.0, 0.5]
+    path = tmp_path / "slate.csv"
+    slate.to_csv(path, index=False)
+    quick = tmp_path / "quick.json"
+    quick.write_text(json.dumps({"field": {**QUICK_FIELD, "ownership_scenarios": 1}}))
+    out = tmp_path / "out"
+    main(["simulate", str(path), "--sims", "3000", "--seed", "1", "--out", str(out)])
+    capsys.readouterr()
+    name = slate.loc[star, "name"]
+    main(["lineups", str(out / "simulation.npz"), "--config", str(quick), "--contest", "contests/sample_small_gpp.json",
+          "--sampled", "4000", "--candidates", "300", "--optimizer-lineups", "40", "--finalists", "40", "--portfolio", "20",
+          "--field", "2000", "--show", "0", "--seed", "1", "--exposure", f"{name}=0",
+          "--out", str(tmp_path / "lineups.csv"), "--portfolio-out", str(tmp_path / "portfolio.csv")])
+    graded = pd.read_csv(tmp_path / "lineups.csv")
+    used = graded[["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE", "FLEX", "DST"]].apply(lambda c: c.str.startswith(name + " ("))
+    assert not used.any().any() and len(pd.read_csv(tmp_path / "portfolio.csv")) == 20
+    printed = capsys.readouterr().out
+    assert not any(name in line for line in printed.splitlines() if line.startswith("Only "))   # never searched around

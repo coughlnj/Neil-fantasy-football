@@ -85,14 +85,6 @@ def cmd_lineups(args) -> None:
     print(f"Sampled {field_size:,} opponent lineups; ownership within "
           f"{100 * np.abs(realised - target).max():.1f} points of your projections.")
 
-    candidates = search_candidates(
-        players, build, field, contest, settings, args.optimizer_lineups, args.sampled, args.candidates,
-        args.seed, log=print,
-    )
-    graders = sample_field_scenarios(players, settings, field_size, args.seed, log=print)
-    print(f"Grading {len(candidates):,} lineups over {grade.shape[1]:,} simulated slates"
-          + (f", shared between {len(graders)} versions of the field's ownership..." if len(graders) > 1 else "..."))
-    results = evaluate(candidates, graders, grade, contest)
     overrides = {}
     for item in args.exposure or []:
         name, _, share = item.rpartition("=")
@@ -101,6 +93,21 @@ def cmd_lineups(args) -> None:
             raise SystemExit(f"--exposure '{item}': expected NAME=SHARE with a player's exact name, e.g. \"Josh Allen=0.8\"")
         overrides[int(match[0])] = float(share)
         print(f"Exposure limit for {players['name'][match[0]].strip()}: {100 * float(share):.0f}%")
+    # Players held out entirely (limit 0) are left out of the search from the start.
+    excluded = np.array([p for p, share in overrides.items() if int(np.floor(share * args.portfolio + 1e-9)) == 0], dtype=int)
+    search_scores = build
+    if len(excluded):
+        search_scores = build.copy()
+        search_scores[excluded] = -1000.0
+    candidates = search_candidates(
+        players, search_scores, field, contest, settings, args.optimizer_lineups, args.sampled, args.candidates,
+        args.seed, log=print,
+    )
+    candidates = candidates[~np.isin(candidates, excluded).any(axis=1)]
+    graders = sample_field_scenarios(players, settings, field_size, args.seed, log=print)
+    print(f"Grading {len(candidates):,} lineups over {grade.shape[1]:,} simulated slates"
+          + (f", shared between {len(graders)} versions of the field's ownership..." if len(graders) > 1 else "..."))
+    results = evaluate(candidates, graders, grade, contest)
     limits = (args.portfolio, args.max_exposure, args.max_overlap, overrides)
     bankroll = args.bankroll if args.bankroll is not None else 20 * args.portfolio * contest.entry_fee
 
@@ -132,11 +139,12 @@ def cmd_lineups(args) -> None:
         # Short of a full set: the strongest lineups lean on players already at their
         # exposure limit. Search again without those players and add what is found.
         used = np.bincount(candidates[finalists[chosen]].ravel(), minlength=len(players))
-        full = np.flatnonzero(used >= exposure_limits(args.portfolio, args.max_exposure, len(players), overrides))
+        cap = exposure_limits(args.portfolio, args.max_exposure, len(players), overrides)
+        full = np.flatnonzero((used >= cap) & (cap > 0))       # held-out players are already excluded
         at_limit = np.union1d(at_limit, full)
         print(f"\nOnly {len(chosen)} lineups fit the exposure and overlap limits: the strongest lineups all use "
               + ", ".join(players["name"].str.strip().to_numpy()[full]) + ", now at their limit. Searching for lineups without them...")
-        masked = build.copy()
+        masked = search_scores.copy()
         masked[full] = -1000.0          # the optimizer and the screening steer clear of them
         extra = search_candidates(players, masked, field, contest, settings, args.optimizer_lineups, args.sampled,
                                   args.candidates, None if args.seed is None else args.seed + 1 + top_up, log=print)
