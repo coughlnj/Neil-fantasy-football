@@ -15,7 +15,7 @@ from . import live
 from .field import field_report, sample_field, sample_field_scenarios, target_ownership
 from .projections import diff_projections, load_projections
 from .sample import sample_slate
-from .roi import (adjust_roi, describe_lineups, evaluate, pick_portfolio, pick_portfolio_for_growth,
+from .roi import (adjust_roi, describe_lineups, evaluate, exposure_limits, pick_portfolio, pick_portfolio_for_growth,
                   portfolio_summary)
 from .settings import load_settings
 from .standings import read_standings, showdown_report, standings_report
@@ -93,15 +93,6 @@ def cmd_lineups(args) -> None:
     print(f"Grading {len(candidates):,} lineups over {grade.shape[1]:,} simulated slates"
           + (f", shared between {len(graders)} versions of the field's ownership..." if len(graders) > 1 else "..."))
     results = evaluate(candidates, graders, grade, contest)
-    table = describe_lineups(candidates, players, realised)
-    slots = table.attrs["slots"]
-    adjusted = adjust_roi(results, table[["projection", "total_ownership_pct"]])
-    table["adj_roi_pct"] = adjusted.round(2)
-    table = pd.concat([table, results.round(3)], axis=1)
-
-    # Choose the portfolio from the strongest lineups, judged together.
-    finalists = np.argsort(-adjusted)[: max(args.finalists, args.portfolio)]
-    _, payouts = evaluate(candidates[finalists], graders, grade, contest, keep_payouts=True)
     overrides = {}
     for item in args.exposure or []:
         name, _, share = item.rpartition("=")
@@ -111,15 +102,52 @@ def cmd_lineups(args) -> None:
         overrides[int(match[0])] = float(share)
         print(f"Exposure limit for {players['name'][match[0]].strip()}: {100 * float(share):.0f}%")
     limits = (args.portfolio, args.max_exposure, args.max_overlap, overrides)
-    simple = pick_portfolio(candidates[finalists], adjusted[finalists], *limits)
     bankroll = args.bankroll if args.bankroll is not None else 20 * args.portfolio * contest.entry_fee
-    if bankroll > 0:
-        chosen = pick_portfolio_for_growth(
-            candidates[finalists], payouts, adjusted[finalists], contest.entry_fee, args.portfolio, bankroll,
-            args.max_exposure, args.max_overlap, overrides,
-        )
-    else:
-        chosen = simple
+
+    at_limit = np.array([], dtype=int)
+    for top_up in range(5):
+        table = describe_lineups(candidates, players, realised)
+        slots = table.attrs["slots"]
+        adjusted = adjust_roi(results, table[["projection", "total_ownership_pct"]])
+        table["adj_roi_pct"] = adjusted.round(2)
+        table = pd.concat([table, results.round(3)], axis=1)
+
+        # Choose the portfolio from the strongest lineups, judged together.
+        order = np.argsort(-adjusted)
+        finalists = order[: max(args.finalists, args.portfolio)]
+        if len(at_limit):     # also the best lineups that avoid the players already at their limit
+            free = order[~np.isin(candidates[order], at_limit).any(axis=1)]
+            finalists = np.concatenate([finalists, free[~np.isin(free, finalists)][: max(args.finalists, args.portfolio)]])
+        _, payouts = evaluate(candidates[finalists], graders, grade, contest, keep_payouts=True)
+        simple = pick_portfolio(candidates[finalists], adjusted[finalists], *limits)
+        if bankroll > 0:
+            chosen = pick_portfolio_for_growth(
+                candidates[finalists], payouts, adjusted[finalists], contest.entry_fee, args.portfolio, bankroll,
+                args.max_exposure, args.max_overlap, overrides,
+            )
+        else:
+            chosen = simple
+        if len(chosen) >= args.portfolio or top_up == 4:
+            break
+        # Short of a full set: the strongest lineups lean on players already at their
+        # exposure limit. Search again without those players and add what is found.
+        used = np.bincount(candidates[finalists[chosen]].ravel(), minlength=len(players))
+        full = np.flatnonzero(used >= exposure_limits(args.portfolio, args.max_exposure, len(players), overrides))
+        at_limit = np.union1d(at_limit, full)
+        print(f"\nOnly {len(chosen)} lineups fit the exposure and overlap limits: the strongest lineups all use "
+              + ", ".join(players["name"].str.strip().to_numpy()[full]) + ", now at their limit. Searching for lineups without them...")
+        masked = build.copy()
+        masked[full] = -1000.0          # the optimizer and the screening steer clear of them
+        extra = search_candidates(players, masked, field, contest, settings, args.optimizer_lineups, args.sampled,
+                                  args.candidates, None if args.seed is None else args.seed + 1 + top_up, log=print)
+        extra = extra[~np.isin(extra, full).any(axis=1)]
+        known = {tuple(row) for row in np.sort(candidates, axis=1)}
+        extra = np.array([row for row in extra if tuple(np.sort(row)) not in known], dtype=int).reshape(-1, candidates.shape[1])
+        if len(extra) == 0:
+            break
+        print(f"Grading {len(extra):,} more lineups...")
+        candidates = np.vstack([candidates, extra])
+        results = pd.concat([results, evaluate(extra, graders, grade, contest)], ignore_index=True)
     if len(chosen) < args.portfolio:
         print(f"Note: only {len(chosen)} lineups fit the exposure and overlap limits. Raise --finalists, "
               "--max-exposure or --max-overlap for a full set.")

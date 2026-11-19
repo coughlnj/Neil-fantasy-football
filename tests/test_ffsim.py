@@ -732,3 +732,31 @@ def test_field_builds_around_games(players, settings):
     assert after["facing"] < 0.6 * before["facing"]
     assert after["rb_dst"] > 1.3 * before["rb_dst"]
     assert after["rb_game"] > 1.2 * before["rb_game"]
+
+
+def test_short_portfolio_is_topped_up(tmp_path, capsys):
+    """One player so underpriced that every strong lineup uses him: with a 50% cap the
+    first pick runs short, and the tool searches again without him to fill the set."""
+    from ffsim.cli import main
+    from ffsim.sample import sample_slate
+
+    slate = sample_slate(8, seed=3)
+    star = slate.index[slate["position"] == "WR"][3]
+    slate.loc[star, ["salary", "mean", "floor", "ceiling", "ownership"]] = [3000, 30.0, 18.0, 44.0, 0.5]
+    path = tmp_path / "slate.csv"
+    slate.to_csv(path, index=False)
+    quick = tmp_path / "quick.json"
+    quick.write_text(json.dumps({"field": {**QUICK_FIELD, "ownership_scenarios": 1}}))
+    out = tmp_path / "out"
+    main(["simulate", str(path), "--sims", "3000", "--seed", "1", "--out", str(out)])
+    capsys.readouterr()
+    main(["lineups", str(out / "simulation.npz"), "--config", str(quick), "--contest", "contests/sample_small_gpp.json",
+          "--sampled", "4000", "--candidates", "300", "--optimizer-lineups", "40", "--finalists", "40", "--portfolio", "20",
+          "--field", "2000", "--max-exposure", "0.5", "--show", "0", "--seed", "1",
+          "--out", str(tmp_path / "lineups.csv"), "--portfolio-out", str(tmp_path / "portfolio.csv")])
+    picked = pd.read_csv(tmp_path / "portfolio.csv")
+    name = slate.loc[star, "name"]
+    with_star = picked[["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE", "FLEX", "DST"]].apply(
+        lambda row: row.str.startswith(name + " (")).any(axis=1)
+    assert len(picked) == 20 and with_star.sum() <= 10
+    assert "Searching for lineups without them" in capsys.readouterr().out      # the top-up was needed
