@@ -112,6 +112,7 @@ def cmd_lineups(args) -> None:
     bankroll = args.bankroll if args.bankroll is not None else 20 * args.portfolio * contest.entry_fee
 
     at_limit = np.array([], dtype=int)
+    shortlisted = np.array([], dtype=int)      # candidate rows; rows only ever get appended, so these stay valid
     for top_up in range(5):
         table = describe_lineups(candidates, players, realised)
         slots = table.attrs["slots"]
@@ -124,7 +125,11 @@ def cmd_lineups(args) -> None:
         finalists = order[: max(args.finalists, args.portfolio)]
         if len(at_limit):     # also the best lineups that avoid the players already at their limit
             free = order[~np.isin(candidates[order], at_limit).any(axis=1)]
-            finalists = np.concatenate([finalists, free[~np.isin(free, finalists)][: max(args.finalists, args.portfolio)]])
+            finalists = np.concatenate([finalists, free[: max(args.finalists, args.portfolio)]])
+        # Keep every lineup shortlisted in earlier rounds, so a round can only add options.
+        finalists = np.unique(np.concatenate([shortlisted, finalists]))
+        finalists = finalists[np.argsort(-adjusted[finalists])]
+        shortlisted = finalists
         _, payouts = evaluate(candidates[finalists], graders, grade, contest, keep_payouts=True)
         simple = pick_portfolio(candidates[finalists], adjusted[finalists], *limits)
         if bankroll > 0:

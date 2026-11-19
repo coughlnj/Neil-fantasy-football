@@ -760,6 +760,9 @@ def test_short_portfolio_is_topped_up(tmp_path, capsys):
         lambda row: row.str.startswith(name + " (")).any(axis=1)
     assert len(picked) == 20 and with_star.sum() <= 10
     assert "Searching for lineups without them" in capsys.readouterr().out      # the top-up was needed
+    graded = pd.read_csv(tmp_path / "lineups.csv")
+    # The set is drawn from the strong end: no worse on average than the top half of all graded lineups.
+    assert picked["adj_roi_pct"].mean() >= graded["adj_roi_pct"].quantile(0.5)
 
 
 def test_a_player_can_be_left_out(tmp_path, capsys):
