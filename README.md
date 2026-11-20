@@ -100,13 +100,16 @@ The stacking, bring-back and salary figures are measured from the 8 November 202
 
 Ownership and stacking targets can conflict (a 30%-owned quarterback forces ownership onto their receivers); when they do, the stack mix wins and the report shows the ownership gap.
 
-The field is also made of three kinds of builder, and builds around games the way real entrants do. Both were fitted on the 8 and 15 November contests, with each week's field built from that week's actual ownership so the provider's ownership misses do not get in the way:
+The field is made of the four kinds of real entrant, by how many entries they play, with each kind's measured share and stacking habits. Each kind mixes lineups guided by ownership with a smaller share of optimizer-style lineups (the highest-projected of 40 draws), which make most of the duplicates. Fitted on the 8 and 15 November contests, with each week's field built from that week's actual ownership so the provider's ownership misses do not get in the way:
 
-| Builder   | Share | How they build                                                        |
-|-----------|-------|-----------------------------------------------------------------------|
-| Casual    | 25%   | Loosely tied to ownership, more off-the-board players, fewer stacks   |
-| Typical   | 65%   | Follows ownership                                                     |
-| Optimizer | 10%   | Each lineup is the highest-projected of 40 draws; these are the lineups that get duplicated |
+| Kind of entrant | Share | Ownership-guided sharpness | Optimizer-style share |
+|---|---|---|---|
+| Single entry | 13% | 0.65 (loosest) | 9% |
+| 2-19 entries | 27% | 0.70 | 14% |
+| 20-149 entries | 21% | 0.85 | 18% |
+| 150 entries | 38% | 0.95 | 14% |
+
+Each kind then lands close to its real counterpart. On 15 November, the share of lineups with Emmett Johnson (66% owned) by kind, real against simulated: 50/49%, 56/56%, 70/69%, 77/75%; duplicated lineups 4.9/3.5%, 9.9/6.7%, 12.4/10.6%, 9.4/9.7%. An earlier version used three builder types (casual, typical, optimizer) whose extremes only averaged out to the right field: the casual type rostered Johnson in 24% of lineups and the optimizer type in 100%, with most duplicates coming from that one type.
 
 Building around games (`field.pairing`): a player facing the lineup's own defense is about a quarter as likely to be picked, and running backs are about twice as likely when they play for the lineup's defense, its quarterback or the quarterback's opponent. A third pass catcher in a double stack is also favoured. Without these the field put a player against its own defense in 21% of lineups (real: 8%) and a running back with his own defense in 9-12% (real: 15-18%).
 
@@ -114,19 +117,21 @@ Replayed at full size, the simulated field against the real one:
 
 | Measure | Nov 8 real | Nov 8 simulated | Nov 15 real | Nov 15 simulated |
 |---|---|---|---|---|
-| A player facing own defense | 8.2% | 7.8% | 8.4% | 8.6% |
-| RB with own defense | 18.2% | 19.1% | 14.6% | 14.2% |
-| QB with own RB / opposing RB | 16.1% / 18.2% | 14.9% / 18.2% | 19.7% / 19.1% | 21.1% / 18.4% |
-| Spread (sd) of projected lineup totals | 7.42 | 7.03 | 8.33 | 8.36 |
-| Spread (sd) of lineup ownership (sum of log ownership) | 3.49 | 3.56 | 3.31 | 3.57 |
-| Shares its lineup with another entry | 8.5% | 5.4% | 9.6% | 9.6% |
-| Cash line / top 1% (scored on real results) | 138.6 / 174.3 | 139.0 / 175.8 | 180.3 / 229.4 | 179.3 / 225.3 |
+| A player facing own defense | 8.2% | 8.0% | 8.4% | 8.5% |
+| RB with own defense | 18.2% | 18.9% | 14.6% | 14.2% |
+| QB with own RB / opposing RB | 16.1% / 18.2% | 15.1% / 18.1% | 19.7% / 19.1% | 20.6% / 19.2% |
+| Spread (sd) of projected lineup totals | 7.42 | 6.77 | 8.33 | 7.85 |
+| Spread (sd) of lineup ownership (sum of log ownership) | 3.49 | 3.22 | 3.31 | 3.19 |
+| Shares its lineup with another entry | 8.5% | 4.4% | 9.6% | 8.4% |
+| In a group of 5+ identical lineups | 2.1% | 0.7% | 2.3% | 2.4% |
+| Cash line / top 1% (scored on real results) | 138.6 / 174.3 | 138.8 / 175.1 | 180.3 / 229.4 | 178.3 / 224.1 |
 
 Known gaps:
 
 - **Two contests.** Everything above is fitted to two weeks.
 - **Flex split follows the ownership projections.** With actual ownership it matches; when the provider overstates running backs, so does the field.
-- **No repeated entries.** Some real entrants enter one lineup many times (one entered the same lineup 150 times on 8 November); the simulated field does not, which is part of why it has fewer duplicates that week.
+- **No repeated entries.** Some real entrants enter one lineup many times (one entered the same lineup 150 times on 8 November); the simulated field does not. Duplicates on 8 November stay low under every setting tried, which looks specific to that slate.
+- **Too few very weak lineups.** The bottom 1% of simulated lineups project 117-119 points against 113-115 in the real fields; these rarely cash, so it matters little.
 - **The top end depends on the week.** When one game turns into a shootout, the real field has more lineups built around it than the simulated one (15 November: top 1% at 229.4 real, 225 simulated); on 8 November the simulated top end was slightly higher.
 
 Output columns worth knowing:
@@ -222,6 +227,7 @@ How it works:
 - **The clock** runs off real amounts of time, depending on whether the clock stopped and whether the offence is hurrying or protecting a lead. Halves, overtime, kickoffs, punts, penalties, safeties and returns for touchdowns are all played out.
 - **Players.** Each target and carry goes to a player. A team's split starts from this season's usage (recent games counting most; targets by depth, carries by field zone) and is adjusted, with the offence's overall quality, until the simulated averages are close to the projections. That is how injuries and role changes in the projections carry through.
 - **Scoring** is DraftKings classic, including yardage bonuses and defences.
+- **Players leaving games.** A running back, receiver or tight end can leave a game partway through (injury or benching), and his later targets and carries go to teammates (`pbp.exit_rate`: 13%, 11% and 9% of games). Fitted to real games from 2024 to mid-2026: starters projected for 8+ who vanish after halftime (real / simulated: RB 2.6/2.3%, WR 6.9/6.2%, TE 8.0/6.6%) and who score near zero (RB 1.3/0.9%, WR 3.2/3.8%, TE 3.0/3.9%). Without it almost no simulated running back ever had a dud (0.3% near zero).
 - **Game plans.** A team's lean toward the pass also varies from one game to the next, beyond what the score and clock explain (`pbp.game_plan_sd` in the settings, in log-odds). The size is fitted so the spread of a team's pass share matches real games; it moves volume between the passing and running games without changing how much scoring swings.
 - **Anchoring.** Each player's simulated results are finally scaled so his average equals his projection exactly. The spread of his outcomes, and how players move together, come from the simulated games; the supplied floors and ceilings are not used.
 
@@ -248,7 +254,9 @@ Checks so far:
 
 Scoring already swings as much as real games do, so there is no general "good day / bad day" effect on an offence's quality: adding one made teams beat the line by 14+ points half again as often as they really do. What was missing was variation in the play mix, which the game plans supply. A test fails if scoring ever swings more than 5% differently from real games, or if volume swings wider than real.
 
-Known gaps: passing yardage still varies a little less than in real games (62.7 against 66.6); every play is independent given the situation; and it has not yet been compared with the default simulator on real contest results.
+Links between offenses and the opposing defense were checked with both sides adjusted for the betting line and each player's season level: quarterback with the opposing defense -0.39 simulated against -0.34 real, lead running back -0.29 against -0.21, lead receiver -0.11 against -0.17. An earlier, cruder measure had suggested these were much too strong; they are not.
+
+Known gaps: teammates at the same position move together less than in real games (lead receiver with second receiver -0.07 against +0.04), because receivers compete for targets in the simulator without sharing good days, and exits add to it; passing yardage still varies a little less than in real games (62.7 against 66.6); and every play is independent given the situation.
 
 ## Historical results
 

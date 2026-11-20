@@ -63,20 +63,31 @@ DEFAULTS: dict = {
             "none": 0.126, "single": 0.351, "single_bringback": 0.168,
             "double": 0.199, "double_bringback": 0.156,
         },
-        # Kinds of builder in the field. Each has its share of entries, its stack types
-        # (same order as stack_classes), a sharpness (below 1 spreads picks toward less
-        # popular players) and best_of (each lineup is the highest-projected of that many
-        # draws; high values behave like an optimizer, and produce the duplicates). Fitted
-        # on the 8 and 15 November contests, with each field built from that week's actual
-        # ownership, to their spread of lineup quality, spread of lineup ownership and
-        # duplicated lineups. Set to None for a single uniform field.
+        # Kinds of builder in the field: the four kinds of real entrant, by how many entries
+        # they play, with their measured shares and stack types (same order as
+        # stack_classes). Each kind mixes two styles: lineups guided by ownership, with a
+        # sharpness (below 1 spreads picks toward less popular players), and a smaller share
+        # of optimizer-style lineups, each the highest-projected of best_of draws, which make
+        # most of the duplicates. Fitted on the 8 and 15 November contests, with each week's
+        # field built from its actual ownership, to each kind's average projection,
+        # chalkiness, spread and duplicated lineups. Set to None for a single uniform field.
         "groups": [
-            {"name": "casual", "share": 0.25, "sharpness": 0.4, "best_of": 1,
-             "stack_classes": [0.298, 0.424, 0.109, 0.117, 0.052]},
-            {"name": "typical", "share": 0.65, "sharpness": 1.0, "best_of": 1,
-             "stack_classes": [0.071, 0.327, 0.187, 0.224, 0.19]},
-            {"name": "optimizer", "share": 0.10, "sharpness": 1.0, "best_of": 40,
-             "stack_classes": [0.048, 0.321, 0.190, 0.245, 0.196]},
+            {"name": "single entry", "share": 0.1176, "sharpness": 0.65, "best_of": 1,
+             "stack_classes": [0.2851, 0.4252, 0.1184, 0.1169, 0.0544]},
+            {"name": "single entry, optimizer", "share": 0.0116, "sharpness": 1.0, "best_of": 40,
+             "stack_classes": [0.2851, 0.4252, 0.1184, 0.1169, 0.0544]},
+            {"name": "2-19 entries", "share": 0.2362, "sharpness": 0.7, "best_of": 1,
+             "stack_classes": [0.1752, 0.3634, 0.1633, 0.1684, 0.1297]},
+            {"name": "2-19 entries, optimizer", "share": 0.0384, "sharpness": 1.0, "best_of": 40,
+             "stack_classes": [0.1752, 0.3634, 0.1633, 0.1684, 0.1297]},
+            {"name": "20-149 entries", "share": 0.176, "sharpness": 0.85, "best_of": 1,
+             "stack_classes": [0.0912, 0.3181, 0.1922, 0.2054, 0.193]},
+            {"name": "20-149 entries, optimizer", "share": 0.0386, "sharpness": 1.0, "best_of": 40,
+             "stack_classes": [0.0912, 0.3181, 0.1922, 0.2054, 0.193]},
+            {"name": "150 entries", "share": 0.3282, "sharpness": 0.95, "best_of": 1,
+             "stack_classes": [0.0566, 0.3356, 0.2016, 0.2297, 0.1765]},
+            {"name": "150 entries, optimizer", "share": 0.0534, "sharpness": 1.0, "best_of": 40,
+             "stack_classes": [0.0566, 0.3356, 0.2016, 0.2297, 0.1765]},
         ],
         # How entrants build around games, as multipliers on a player's chance of being
         # picked (1 = no effect). Fitted to the same two contests: real lineups put a
@@ -121,7 +132,11 @@ DEFAULTS: dict = {
     # Play-by-play simulator. game_plan_sd: how much a team's lean toward the pass varies from
     # one game to the next (in log-odds), beyond what the score and clock explain. Fitted so the
     # spread of a team's pass share matches real games (see `ffsim pbp-check`). 0 turns it off.
-    "pbp": {"game_plan_sd": 0.25},
+    # exit_rate: chance per game that a running back, receiver or tight end leaves partway
+    # through (injury or benching), his later targets and carries going to teammates. Fitted
+    # so starters vanish after halftime, fall below a fifth of their usage after halftime,
+    # and score near zero about as often as in real games (2024 to mid-2026).
+    "pbp": {"game_plan_sd": 0.25, "exit_rate": {"RB": 0.13, "WR": 0.11, "TE": 0.09}},
 }
 
 

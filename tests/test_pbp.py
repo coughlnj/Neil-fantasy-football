@@ -149,7 +149,7 @@ def test_game_plan_variation_reaches_the_players(model):
 def test_on_play_sees_every_scrimmage_play(model):
     seen = {"plays": 0, "yards": 0.0}
 
-    def record(games, offence, row, gain, scored, is_run, yardline):
+    def record(games, offence, row, gain, scored, is_run, yardline, half):
         seen["plays"] += len(games)
         complete = model.plays.columns["complete"][row]
         seen["yards"] += float(gain[complete].sum())
@@ -198,6 +198,26 @@ def test_every_passing_yard_is_a_receiving_yard(model):
         assert stats["rush_yards"][on].sum(axis=0) == pytest.approx(box["rush_yards"][side], abs=1e-3)
         assert stats["interceptions"][qb] == pytest.approx(box["interceptions"][side])
     assert (stats["receptions"][slate["position"] == "QB"] == 0).all()
+
+
+def test_players_can_leave_a_game(model):
+    slate = made_up_slate()
+    matchup = Matchup(slate, usage_history(made_up_plays()))
+    starters = np.flatnonzero(slate["position"].isin(["RB", "WR", "TE"]).to_numpy() & (slate["mean"] >= 8).to_numpy())
+
+    def vanish(rate):
+        matchup.exit_rate = {"RB": rate, "WR": rate, "TE": rate}
+        points, box, stats = matchup.simulate(model, 4000, np.random.default_rng(5))
+        h1, h2 = stats["touches_h1"][starters], stats["touches_h2"][starters]
+        for side in (0, 1):            # the ball still goes somewhere: every completion has a receiver
+            on = matchup.side == side
+            assert stats["rec_yards"][on].sum(axis=0) == pytest.approx(box["pass_yards"][side], abs=1e-3)
+        return ((h1 >= 2) & (h2 == 0)).mean(), points
+
+    before, steady = vanish(0.0)
+    after, shaken = vanish(0.3)
+    assert after > before + 0.03
+    assert (shaken[starters] <= 0.5).mean() > (steady[starters] <= 0.5).mean()
 
 
 def test_fitting_moves_players_toward_their_projections(model):

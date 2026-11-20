@@ -27,9 +27,9 @@ def simulate_game(model: M.GameModel, n_sims: int, rng: np.random.Generator,
       its own (how a team's day can go better or worse than expected).
     pass_shift: added to each offence's pass-or-run log-odds (its lean relative to the league).
       One value per team, or shape (2, n_sims) like quality.
-    on_play: optional callback(games, offence, row, gain, scored, is_run, yardline) called
+    on_play: optional callback(games, offence, row, gain, scored, is_run, yardline, half) called
       for every batch of scrimmage plays, for attaching player statistics. `row` indexes
-      the real plays in model.plays; `yardline` is where the snap was.
+      the real plays in model.plays; `yardline` is where the snap was; `half` is 1, 2 or 3 (overtime).
 
     Returns the box score: stats[name] has shape (2, n_sims), plus "overtime"."""
     n = n_sims
@@ -206,7 +206,7 @@ def simulate_game(model: M.GameModel, n_sims: int, rng: np.random.Generator,
             add("interceptions", k[lost == 1], t[lost == 1])
             add("fumbles_lost", k[lost == 2], t[lost == 2])
             if on_play is not None:
-                on_play(k, t, row, gain, scored, is_run, yl[k].copy())
+                on_play(k, t, row, gain, scored, is_run, yl[k].copy(), half[k].copy())
 
             mode = M.clock_mode(diff[todo], game_sec[todo], half_sec[k])
             stopped = (col["stops_clock"][row] | scored | (lost > 0)).astype(np.int64)

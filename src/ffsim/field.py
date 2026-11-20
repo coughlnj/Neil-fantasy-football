@@ -69,7 +69,7 @@ class LineupSampler:
         foe_pick = np.where(foe, base, -np.inf).argmax(axis=1)[:, None]
         adjust = np.zeros((batch, len(logw)))
         block = (mate & (kind <= 2)[:, None]) | (foe & np.isin(kind, [1, 3])[:, None])
-        adjust[rows, c_idx[None, :]] = np.where(block, -np.inf, 0.0)
+        adjust[:, c_idx] = np.where(block, -np.inf, 0.0)
         force = lambda who, col: adjust.__setitem__((np.flatnonzero(who), c_idx[col[who]]), 1e6)
         force(kind >= 1, mate_order[:, 0])
         force(kind >= 3, mate_order[:, 1])
@@ -87,13 +87,13 @@ class LineupSampler:
         skill = np.concatenate([self.idx[p] for p in ("RB", "WR", "TE")])
         d_team = self.team[dst][:, None]
         pl = self.pair_log
-        adjust[rows, skill[None, :]] += np.where(self.opp[skill][None, :] == d_team, pl["player_facing_dst"], 0.0)
+        adjust[:, skill] += np.where(self.opp[skill][None, :] == d_team, pl["player_facing_dst"], 0.0)
         rb = self.idx["RB"]
         rb_team = self.team[rb][None, :]
-        adjust[rows, rb[None, :]] += (np.where(rb_team == d_team, pl["rb_with_own_dst"], 0.0)
+        adjust[:, rb] += (np.where(rb_team == d_team, pl["rb_with_own_dst"], 0.0)
                                       + np.where(rb_team == q_team, pl["rb_with_qb"], 0.0)
                                       + np.where(rb_team == q_opp, pl["rb_facing_qb"], 0.0))
-        adjust[rows, c_idx[None, :]] += np.where(mate & (kind >= 3)[:, None], pl["third_pass_catcher"], 0.0)
+        adjust[:, c_idx] += np.where(mate & (kind >= 3)[:, None], pl["third_pass_catcher"], 0.0)
 
         picks, pools = [qb[:, None]], []
         for position, count in (("RB", 2), ("WR", 3), ("TE", 1)):
@@ -123,21 +123,27 @@ class LineupSampler:
         got = np.where(mates == 0, 0, 2 * np.minimum(mates, 2) - 1 + bring)
         return lineups, self.salary[lineups].sum(axis=1), fits & (got == kind), base
 
-    def salary_tilt(self, logw: np.ndarray, rng: np.random.Generator, classes: np.ndarray | None = None) -> np.ndarray:
+    def salary_tilt(self, logw: np.ndarray, rng: np.random.Generator, classes: np.ndarray | None = None,
+                    around: float | None = None) -> np.ndarray:
         """Lean the weights toward cheaper or dearer players so that, before the flex is
-        chosen, a typical lineup has about one typical flex salary left. Returns the weights."""
+        chosen, a typical lineup has about one typical flex salary left. Returns the weights;
+        the lean found is kept in self.last_tilt. `around` (a previous lean) narrows the search."""
         flex = np.concatenate([self.idx[p] for p in ("RB", "WR", "TE")])
         weight = np.exp(logw[flex] - logw[flex].max())
         room = float((weight * self.salary[flex]).sum() / weight.sum())
         if not np.isinf(self.fade):
             room += self.fade
         lo, hi = -3.0, 3.0  # change in log-weight per $1,000 of salary
-        for _ in range(9):
+        steps = 9
+        if around is not None:      # weights moved only a little since the last search
+            lo, hi, steps = max(around - 0.4, -3.0), min(around + 0.4, 3.0), 5
+        for _ in range(steps):
             mid = (lo + hi) / 2
             kind = rng.choice(5, size=4000, p=self.class_target if classes is None else classes)
             base = self._draw(logw + mid * self.salary / 1000, kind, rng)[3]
             lo, hi = (mid, hi) if np.median(base) < self.cap - room else (lo, mid)
-        return logw + (lo + hi) / 2 * self.salary / 1000
+        self.last_tilt = (lo + hi) / 2
+        return logw + self.last_tilt * self.salary / 1000
 
     def sample(
         self,
@@ -243,6 +249,8 @@ def sample_field_by_group(players: pd.DataFrame, settings: dict, n: int, seed: i
     cfg = settings["field"]
     pos = players["position"].to_numpy()
 
+    tilts: dict[int, float] = {}       # each group's salary lean from the previous round, to start from
+
     def draw(weights: np.ndarray, count: int):
         sizes = np.floor(shares * count).astype(int)
         sizes[np.argmax(shares)] += count - sizes.sum()
@@ -254,7 +262,8 @@ def sample_field_by_group(players: pd.DataFrame, settings: dict, n: int, seed: i
             classes = classes / classes.sum()
             # Sharpness below 1 flattens the weights: more off-the-board picks.
             own = np.where(active, weights * group.get("sharpness", 1.0), -np.inf)
-            tilted = sampler.salary_tilt(own, rng, classes)
+            tilted = sampler.salary_tilt(own, rng, classes, tilts.get(number))
+            tilts[number] = sampler.last_tilt
             parts.append(sampler.sample(tilted, size, rng, classes, group.get("best_of", 1.0), value))
             labels.append(np.full(size, number))
         order = rng.permutation(count)

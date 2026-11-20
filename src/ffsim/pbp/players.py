@@ -142,6 +142,9 @@ class Matchup:
         self.quality = np.zeros(2)
         self.pass_shift = np.zeros(2)
         self.game_plan_sd = 0.0                  # game-to-game variation in each team's lean toward the pass
+        # Chance that a running back, receiver or tight end leaves a game partway through
+        # (injury or benching); his later targets and carries go to teammates.
+        self.exit_rate = {"RB": 0.0, "WR": 0.0, "TE": 0.0}
 
     def _shares(self):
         """Cumulative share tables: who is targeted (by side and depth), who carries (by side and zone)."""
@@ -171,7 +174,27 @@ class Matchup:
         def pick(table, u):
             return (u[:, None] > table).sum(axis=1).clip(max=n - 1)
 
-        def on_play(games, offence, row, gain, scored, is_run, yardline):
+        # Mid-game exits: the team play after which each player is gone in each game (inf: he stays).
+        pos = self.players["position"].to_numpy()
+        rate = np.array([self.exit_rate.get(p, 0.0) for p in pos])
+        leaves = rng.random((n, n_sims)) < rate[:, None]
+        exit_at = np.where(leaves, rng.uniform(0, 70, (n, n_sims)), np.inf)
+        team_plays = np.zeros((2, n_sims))
+        stats["touches_h1"] = np.zeros((n, n_sims), dtype=np.float32)
+        stats["touches_h2"] = np.zeros((n, n_sims), dtype=np.float32)
+
+        def choose(tables, u, games, offence):
+            """Pick a player from each play's share table, skipping players who have left."""
+            who = pick(tables, u)
+            for _ in range(6):
+                gone = team_plays[offence, games] >= exit_at[who, games]
+                if not gone.any():
+                    break
+                who[gone] = pick(tables[gone], rng.random(int(gone.sum())))
+            return who
+
+        def on_play(games, offence, row, gain, scored, is_run, yardline, half):
+            team_plays[offence, games] += 1
             qb = passer[offence]
             complete, target, scramble = col["complete"][row], col["target"][row], col["scramble"][row]
             lost = col["turnover"][row]
@@ -180,7 +203,10 @@ class Matchup:
             if target.any():
                 t = np.flatnonzero(target)
                 depth = np.searchsorted(AIR_EDGES, col["air_yards"][row[t]], side="left")
-                receiver = pick(tgt[offence[t], depth], u[t])
+                receiver = choose(tgt[offence[t], depth], u[t], games[t], offence[t])
+                second = half[t] >= 2
+                np.add.at(stats["touches_h1"], (receiver[~second], games[t][~second]), 1)
+                np.add.at(stats["touches_h2"], (receiver[second], games[t][second]), 1)
                 done = complete[t]
                 g, r, q = games[t][done], receiver[done], qb[t][done]
                 stats["receptions"][r, g] += 1
@@ -195,7 +221,11 @@ class Matchup:
             if runs.any():
                 r = np.flatnonzero(runs)
                 zone = (yardline[r] <= 5).astype(int)
-                back = np.where(scramble[r], qb[r], pick(run[offence[r], zone], u[r]))
+                back = np.where(scramble[r], qb[r], choose(run[offence[r], zone], u[r], games[r], offence[r]))
+                designed = ~scramble[r]
+                second = half[r] >= 2
+                np.add.at(stats["touches_h1"], (back[designed & ~second], games[r][designed & ~second]), 1)
+                np.add.at(stats["touches_h2"], (back[designed & second], games[r][designed & second]), 1)
                 stats["rush_yards"][back, games[r]] += gain[r]
                 stats["rush_td"][back, games[r]] += scored[r]
                 carrier[r] = back

@@ -185,9 +185,11 @@ def test_field_is_legal_and_matches_targets(players, settings, field):
     report = field_report(field, players, settings).set_index("measure")["value"]
     assert report[["QB with no pass catcher", "QB with exactly 1 pass catcher", "QB with 2 or more pass catchers"]].sum() == pytest.approx(100, abs=0.2)
     assert report[["Flex is a RB", "Flex is a WR", "Flex is a TE"]].sum() == pytest.approx(100, abs=0.2)
-    assert report["QB with no pass catcher"] == pytest.approx(12.6, abs=0.5)
-    assert report["QB with 2 or more pass catchers"] == pytest.approx(35.5, abs=0.5)
-    assert report["Stacks that add an opposing pass catcher"] == pytest.approx(37.1, abs=1)
+    # The stack mix the builder groups add up to (none, single, single + bring-back, double, double + bring-back).
+    mix = sum(np.array(g["share"]) * np.array(g["stack_classes"]) for g in settings["field"]["groups"])
+    assert report["QB with no pass catcher"] == pytest.approx(100 * mix[0], abs=0.5)
+    assert report["QB with 2 or more pass catchers"] == pytest.approx(100 * (mix[3] + mix[4]), abs=0.6)
+    assert report["Stacks that add an opposing pass catcher"] == pytest.approx(100 * (mix[2] + mix[4]) / (1 - mix[0]), abs=1)
     assert report["Median salary used"] >= 49700 and report["Defense facing its own QB"] < 5
     assert 100 < report["Average salary left unspent"] < 180
 
@@ -207,16 +209,18 @@ def test_best_of_selection_raises_lineup_quality(players, settings):
 
 
 def test_field_groups_differ_in_quality_and_duplicate_more(players, settings):
-    lineups, realised, group = sample_field_by_group(players, settings, 6000, seed=1)
+    lineups, realised, group = sample_field_by_group(players, settings, 8000, seed=1)
     names = [g["name"] for g in settings["field"]["groups"]]
-    assert names == ["casual", "typical", "optimizer"]
-    shares = np.bincount(group, minlength=3) / len(group)
-    assert shares == pytest.approx([0.25, 0.65, 0.10], abs=0.01)
+    assert names[::2] == ["single entry", "2-19 entries", "20-149 entries", "150 entries"]
+    assert all(n.endswith(", optimizer") for n in names[1::2])
+    shares = np.bincount(group, minlength=len(names)) / len(group)
+    assert shares == pytest.approx([g["share"] for g in settings["field"]["groups"]], abs=0.01)
     total = players["mean"].to_numpy(float)[lineups].sum(axis=1)
-    casual, typical, optimizer = (total[group == i].mean() for i in range(3))
-    assert casual < typical - 1 and optimizer > typical + 5
-    # Optimizer-style lineups cluster tightly at the top.
-    assert total[group == 2].std() < min(total[group == 1].std(), total[group == 0].std())
+    guided, optimizer = np.isin(group, [0, 2, 4, 6]), np.isin(group, [1, 3, 5, 7])
+    # Optimizer-style lineups sit higher and cluster tightly; single-entry players build the loosest lineups.
+    assert total[optimizer].mean() > total[guided].mean() + 5
+    assert total[optimizer].std() < total[guided].std()
+    assert total[group == 0].mean() < total[group == 6].mean()
     uniform = load_settings()
     uniform["field"]["groups"] = None
     flat, _, labels = sample_field_by_group(players, uniform, 3000, seed=1)
