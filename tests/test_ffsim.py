@@ -228,6 +228,29 @@ def test_field_groups_differ_in_quality_and_duplicate_more(players, settings):
     assert players["mean"].to_numpy(float)[flat].sum(axis=1).std() < total.std()
 
 
+def test_field_built_once_and_rebuilt_when_inputs_change(players, settings):
+    from ffsim import field as field_module
+    from ffsim.field import _sample_field_by_group, sample_field_scenarios
+
+    field_module._FIELD_CACHE.clear()
+    first, _ = sample_field(players, settings, 2000, seed=3)
+    assert len(field_module._FIELD_CACHE) == 1
+    first[:] = 0                                  # callers get copies, so the stored field is untouched
+    again, _ = sample_field(players, settings, 2000, seed=3)
+    assert len(field_module._FIELD_CACHE) == 1
+    assert np.array_equal(again, _sample_field_by_group(players, settings, 2000, seed=3)[0])
+    moved = players.assign(ownership=players["ownership"] * 1.01)
+    sample_field(moved, settings, 2000, seed=3)
+    sample_field(players, settings, 2000, seed=4)
+    other = load_settings()
+    other["field"]["pairing"]["player_facing_dst"] = 0.5
+    sample_field(players, other, 2000, seed=3)
+    assert len(field_module._FIELD_CACHE) == 4    # ownership, seed and settings each force a new field
+    versions = sample_field_scenarios(players, settings, 2000, seed=3)
+    assert len(versions) == settings["field"]["ownership_scenarios"]
+    assert not any(np.array_equal(versions[0], v) for v in versions[1:])   # the ownership versions differ
+
+
 def test_field_survives_ownership_it_cannot_match(players, settings):
     greedy = players.assign(ownership=np.where(players["salary"] > 7000, 60.0, 1.0))
     field, _ = sample_field(greedy, settings, 500, seed=1)

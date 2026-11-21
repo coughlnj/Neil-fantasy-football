@@ -1,8 +1,17 @@
 """Sample the lineups opponents enter, matched to projected ownership."""
 from __future__ import annotations
 
+import hashlib
+import json
+
 import numpy as np
 import pandas as pd
+
+# Fields already built in this process, keyed by everything that decides them (see
+# _field_key). A weekly run builds the same fields for both simulators and for grading;
+# with a fixed seed each rebuild gives the identical lineups, so they are built once.
+_FIELD_CACHE: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = {}
+_FIELD_CACHE_LIMIT = 24
 
 
 class LineupSampler:
@@ -233,9 +242,32 @@ def entrant_groups(settings: dict) -> list[dict]:
     return groups
 
 
+def _field_key(players: pd.DataFrame, settings: dict, n: int, seed: int) -> str:
+    """Fingerprint of every input a field depends on: the whole player table (salaries,
+    positions, teams, projections, ownership...), all settings, the size and the seed."""
+    digest = hashlib.sha256()
+    digest.update(pd.util.hash_pandas_object(players, index=True).to_numpy().tobytes())
+    digest.update(",".join(map(str, players.columns)).encode())
+    digest.update(json.dumps(settings, sort_keys=True, default=str).encode())
+    digest.update(f"{n}|{seed}".encode())
+    return digest.hexdigest()
+
+
 def sample_field_by_group(players: pd.DataFrame, settings: dict, n: int, seed: int | None = None):
     """Sample n opponent lineups. Returns (lineups, realised ownership fractions, group
-    index of each lineup)."""
+    index of each lineup). With a seed, a field already built from identical inputs is
+    reused (copies are returned, so callers cannot alter the stored one)."""
+    if seed is None:
+        return _sample_field_by_group(players, settings, n, seed)
+    key = _field_key(players, settings, n, seed)
+    if key not in _FIELD_CACHE:
+        if len(_FIELD_CACHE) >= _FIELD_CACHE_LIMIT:
+            _FIELD_CACHE.pop(next(iter(_FIELD_CACHE)))
+        _FIELD_CACHE[key] = _sample_field_by_group(players, settings, n, seed)
+    return tuple(part.copy() for part in _FIELD_CACHE[key])
+
+
+def _sample_field_by_group(players: pd.DataFrame, settings: dict, n: int, seed: int | None = None):
     rng = np.random.default_rng(seed)
     sampler = LineupSampler(players, settings)
     target = target_ownership(players, settings)
