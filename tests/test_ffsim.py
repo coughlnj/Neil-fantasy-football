@@ -691,6 +691,9 @@ def test_weekly_command_runs_every_step(tmp_path):
     assert len(kept) == 2 and kept[0].endswith("_v1.csv") and kept[1].endswith("_v2.csv")
     summary = (tmp_path / "run2" / "summary.txt").read_text()
     assert "1 players' projections moved" in summary and f"Your lineups in mine.csv: {count} graded" in summary
+    assert "On fresh slates: expected ROI" in summary and "on the same fresh slates" in summary
+    assert (tmp_path / "run2" / "classic" / "graded_portfolio_fresh.csv").exists()
+    assert "Calibration:" in (tmp_path / "run2" / "run_log.txt").read_text()
     main(["week", str(second), "--out-dir", str(tmp_path / "run3")] + small)       # the same file again is not kept twice
     assert len(list((tmp_path / "kept").iterdir())) == 2
 
@@ -720,6 +723,26 @@ def test_ownership_scenarios(players, settings):
     assert len(fields) == settings["field"]["ownership_scenarios"] and all(f.shape == (1500, 9) for f in fields)
     one = sample_field_scenarios(players, {**settings, "field": {**settings["field"], "ownership_scenarios": 1}}, 1500, seed=2)
     assert len(one) == 1
+
+
+def test_calibration_puts_a_typical_lineup_at_the_rake(players, sim, settings):
+    from ffsim.field import sample_field_scenarios
+    from ffsim.roi import calibrate, calibration_factor, calibration_lineups
+
+    scores, _ = sim
+    settings = {**settings, "field": {**settings["field"], **QUICK_FIELD, "ownership_scenarios": 4}}
+    contest = load_contest("contests/sample_small_gpp.json")
+    fields = sample_field_scenarios(players, settings, 1500, seed=3)
+    assert calibration_lineups(players, settings, fields[:1], 3) is None     # one field: nothing to correct
+    calib = calibration_lineups(players, settings, fields, 3)
+    factor = calibration_factor(evaluate(calib, fields, scores[:, :2000], contest), contest)
+    typical, _ = sample_field(players, settings, 600, seed=77)
+    raw = evaluate(typical, fields, scores[:, :2000], contest)
+    fixed = calibrate(raw, factor)
+    assert fixed["roi_pct"].mean() == pytest.approx(-100 * contest.rake, abs=8)
+    assert (np.argsort(fixed["roi_pct"].to_numpy()) == np.argsort(raw["roi_pct"].to_numpy())).all()   # ranking kept
+    assert np.allclose(fixed["cash_pct"], raw["cash_pct"])
+    assert calibrate(raw, 1.0) is raw
 
 
 def test_grading_against_several_fields(players, sim, settings):

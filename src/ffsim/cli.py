@@ -15,8 +15,8 @@ from . import live
 from .field import field_report, sample_field, sample_field_scenarios, target_ownership
 from .projections import diff_projections, load_projections
 from .sample import sample_slate
-from .roi import (adjust_roi, describe_lineups, evaluate, exposure_limits, pick_portfolio, pick_portfolio_for_growth,
-                  portfolio_summary)
+from .roi import (adjust_roi, calibrate, calibrated_roi, calibration_factor, calibration_lineups, describe_lineups,
+                  evaluate, exposure_limits, pick_portfolio, pick_portfolio_for_growth, portfolio_summary)
 from .settings import load_settings
 from .standings import read_standings, showdown_report, standings_report
 from .simulate import fit_report, load_simulation, save_simulation, simulate_slate
@@ -107,7 +107,11 @@ def cmd_lineups(args) -> None:
     graders = sample_field_scenarios(players, settings, field_size, args.seed, log=print)
     print(f"Grading {len(candidates):,} lineups over {grade.shape[1]:,} simulated slates"
           + (f", shared between {len(graders)} versions of the field's ownership..." if len(graders) > 1 else "..."))
-    results = evaluate(candidates, graders, grade, contest)
+    calib = calibration_lineups(players, settings, graders, args.seed)
+    graded = evaluate(candidates if calib is None else np.vstack([candidates, calib]), graders, grade, contest)
+    results = graded.iloc[: len(candidates)].reset_index(drop=True)
+    factor = calibration_factor(None if calib is None else graded.iloc[len(candidates):], contest)
+    report_calibration(factor, contest)
     limits = (args.portfolio, args.max_exposure, args.max_overlap, overrides)
     bankroll = args.bankroll if args.bankroll is not None else 20 * args.portfolio * contest.entry_fee
 
@@ -164,6 +168,12 @@ def cmd_lineups(args) -> None:
     if len(chosen) < args.portfolio:
         print(f"Note: only {len(chosen)} lineups fit the exposure and overlap limits. Raise --finalists, "
               "--max-exposure or --max-overlap for a full set.")
+    # Reported ROI is calibrated so a typical lineup loses the rake; the picks above are unaffected.
+    table["roi_pct"] = calibrated_roi(table["roi_pct"], factor).round(3)
+    table["roi_se_pct"] = (table["roi_se_pct"] / factor).round(3)
+    table["adj_roi_pct"] = calibrated_roi(table["adj_roi_pct"], factor).round(2)
+    adjusted = calibrated_roi(adjusted, factor)
+    payouts = payouts / factor
     table["in_portfolio"] = False
     table.loc[finalists[chosen], "in_portfolio"] = True
     table = table.sort_values("adj_roi_pct", ascending=False).reset_index(drop=True)
@@ -191,6 +201,13 @@ def cmd_lineups(args) -> None:
         with pd.option_context("display.width", 250, "display.max_columns", None):
             print("\n" + picked.head(args.show).drop(columns=["in_portfolio"]).to_string(index=False))
     print(f"\nPortfolio saved to {args.portfolio_out}; all {len(table):,} graded lineups to {args.out}")
+
+
+def report_calibration(factor: float, contest) -> None:
+    if factor != 1.0:
+        print(f"Calibration: against the shaken-ownership fields a typical opponent lineup grades "
+              f"{100 * (factor * (1 - contest.rake) - 1):+.1f}% instead of the {-100 * contest.rake:.1f}% every "
+              f"lineup averages in a real contest, so all prizes are scaled down by {100 * (1 - 1 / factor):.0f}%.")
 
 
 def write_dk_upload(args, players, contest, slots, value) -> None:
@@ -249,7 +266,13 @@ def cmd_grade(args) -> None:
     graders = sample_field_scenarios(players, settings, field_size, args.seed)
     if len(graders) > 1:
         print(f"The slates are shared between {len(graders)} versions of the field's ownership.")
-    results, payouts = evaluate(lineups, graders, scores, contest, keep_payouts=True)
+    calib = calibration_lineups(players, settings, graders, args.seed)
+    graded, payouts = evaluate(lineups if calib is None else np.vstack([lineups, calib]), graders, scores, contest,
+                               keep_payouts=True)
+    factor = calibration_factor(None if calib is None else graded.iloc[len(lineups):], contest)
+    report_calibration(factor, contest)
+    results = calibrate(graded.iloc[: len(lineups)].reset_index(drop=True), factor)
+    payouts = payouts[: len(lineups)] / factor
     table = describe_lineups(lineups, players, realised)
     adjusted = adjust_roi(results, table[["projection", "total_ownership_pct"]])
     table["adj_roi_pct"] = adjusted.round(2)
@@ -573,17 +596,33 @@ def cmd_week(args) -> None:
             picked = pd.read_csv(os.path.join(folder, "portfolio.csv"))
             slots = picked[["QB", "RB1", "RB2", "WR1", "WR2", "WR3", "TE", "FLEX", "DST"]].to_numpy().ravel()
             top = pd.Series(slots).value_counts().head(6)
-            note(f"\n{names[engine].capitalize()}: {len(picked)} lineups, expected ROI {picked['adj_roi_pct'].mean():+.0f}% "
+            note(f"\n{names[engine].capitalize()}: {len(picked)} lineups, expected ROI {picked['adj_roi_pct'].mean():+.0f}% on the slates it was picked on "
                  f"(top 1% {picked['top1_pct'].mean():.2f}% of the time, cash {picked['cash_pct'].mean():.0f}%).")
             note("  Most used: " + ", ".join(f"{name.split(' (')[0]} {100 * count / len(picked):.0f}%" for name, count in top.items()))
             note(f"  Files: {folder}/portfolio.csv" + (f", {folder}/dk_upload.csv" if args.entries else ""))
+            # The portfolio was picked on these slates, so its ROI above flatters it. Grade it
+            # (and your own lineups) again on slates simulated afresh, which nothing was picked on.
+            step(f"Simulating fresh slates for an honest grade ({names[engine]})")
+            fresh_dir = os.path.join(folder, "fresh")
+            fresh_seed = [] if args.seed is None else ["--seed", str(args.seed + 1000)]
+            main(["simulate", projections, "--engine", engine, "--pbp-data", args.pbp_data, "--sims", str(args.sims), "--out", fresh_dir]
+                 + (["--dk", args.entries] if args.entries else []) + (["--ownership", ownership] if ownership else [])
+                 + (["--config", args.config] if args.config else []) + fresh_seed)
+            fresh = os.path.join(fresh_dir, "simulation.npz")
+            graded = os.path.join(folder, "graded_portfolio_fresh.csv")
+            step(f"Grading the portfolio on the fresh slates ({names[engine]})")
+            main(["grade", os.path.join(folder, "portfolio.csv"), fresh, "--contest", args.contest, "--show", "0", "--out", graded]
+                 + (["--field", str(args.field)] if args.field is not None else []) + common)
+            table = pd.read_csv(graded)
+            note(f"  On fresh slates: expected ROI {table['adj_roi_pct'].mean():+.0f}% (top 1% {table['top1_pct'].mean():.2f}%, "
+                 f"cash {table['cash_pct'].mean():.0f}%). This is the figure to go by.")
             for number, mine in enumerate(args.my_lineups or [], start=1):
                 step(f"Grading {mine} ({names[engine]})")
                 graded = os.path.join(folder, f"graded_my_lineups_{number}.csv")
-                grade = ["grade", mine, sim, "--contest", args.contest, "--show", "0", "--out", graded]
+                grade = ["grade", mine, fresh, "--contest", args.contest, "--show", "0", "--out", graded]
                 main(grade + (["--field", str(args.field)] if args.field is not None else []) + common)
                 table = pd.read_csv(graded)
-                note(f"  Your lineups in {os.path.basename(mine)}: {len(table)} graded, expected ROI {table['adj_roi_pct'].mean():+.0f}% "
+                note(f"  Your lineups in {os.path.basename(mine)}: {len(table)} graded, expected ROI {table['adj_roi_pct'].mean():+.0f}% on the same fresh slates "
                      f"(top 1% {table['top1_pct'].mean():.2f}%, cash {table['cash_pct'].mean():.0f}%); {int((table['adj_roi_pct'] > 0).sum())} "
                      f"positive. Detail: {graded}")
         step("Summary")

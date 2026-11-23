@@ -205,6 +205,52 @@ def pick_portfolio_for_growth(
     return np.array(chosen, dtype=int)
 
 
+CALIBRATION_LINEUPS = 1500
+
+
+def calibration_lineups(players: pd.DataFrame, settings: dict, fields: list, seed: int | None) -> np.ndarray | None:
+    """Typical opponent lineups, drawn fresh from the projected-ownership field, used to
+    measure how far grading against shaken-ownership fields lifts every ROI. None when
+    there is only one field (no shaking, nothing to correct)."""
+    if not isinstance(fields, list) or len(fields) <= 1:
+        return None
+    from .field import sample_field
+
+    return sample_field(players, settings, CALIBRATION_LINEUPS, None if seed is None else seed + 5003)[0]
+
+
+def calibration_factor(calibration: pd.DataFrame | None, contest: Contest) -> float:
+    """How much the shaken-ownership fields inflate prizes.
+
+    All entries together win the prize pool, so a typical lineup must average the rake
+    (-15.9% in the Flea Flicker). Graded against fields built from shaken ownership, typical
+    lineups average about -2% instead: the shaking spreads the field's chalk around, so
+    every lineup meets fewer duplicates than it would in a real contest (checked on the
+    8, 15 and 22 November contests, where real entries graded at +0.1%, -3.3% and +2.3%).
+    Dividing every prize by this factor puts a typical lineup back at the rake. The
+    ranking of lineups is unchanged."""
+    if calibration is None or len(calibration) == 0:
+        return 1.0
+    typical = 1.0 + float(calibration["roi_pct"].mean()) / 100.0
+    return max(typical / (1.0 - contest.rake), 1e-6)
+
+
+def calibrate(results: pd.DataFrame, factor: float) -> pd.DataFrame:
+    """Results with every prize divided by `factor` (see calibration_factor). Finish
+    rates are left as they are."""
+    if factor == 1.0:
+        return results
+    out = results.copy()
+    out["roi_pct"] = (100.0 + out["roi_pct"]) / factor - 100.0
+    if "roi_se_pct" in out:
+        out["roi_se_pct"] = out["roi_se_pct"] / factor
+    return out
+
+
+def calibrated_roi(roi_pct: np.ndarray, factor: float) -> np.ndarray:
+    return (100.0 + np.asarray(roi_pct, dtype=float)) / factor - 100.0
+
+
 def portfolio_summary(payouts: np.ndarray, roi_pct: np.ndarray, entry_fee: float) -> dict:
     """How a set of lineups performs together across the simulated slates."""
     cost = entry_fee * len(payouts)
