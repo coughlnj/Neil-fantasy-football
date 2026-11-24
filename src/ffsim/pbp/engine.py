@@ -18,7 +18,7 @@ STATS = ["points", "plays", "dropbacks", "pass_att", "completions", "pass_yards"
 
 def simulate_game(model: M.GameModel, n_sims: int, rng: np.random.Generator,
                   quality: tuple[float, float] = (0.0, 0.0), pass_shift: tuple[float, float] = (0.0, 0.0),
-                  on_play=None) -> dict:
+                  on_play=None, run_quality: float = 1.0) -> dict:
     """Simulate one matchup n_sims times. Team 0 and team 1 are the two sides.
 
     quality: each offence's edge over the defence it faces, from -1 to 1. A positive
@@ -27,6 +27,9 @@ def simulate_game(model: M.GameModel, n_sims: int, rng: np.random.Generator,
       its own (how a team's day can go better or worse than expected).
     pass_shift: added to each offence's pass-or-run log-odds (its lean relative to the league).
       One value per team, or shape (2, n_sims) like quality.
+    run_quality: how strongly quality applies to designed runs, relative to dropbacks. In
+      real games a team expected to score more gains much more per pass but only a little
+      more per carry, so this is below 1 (see settings["pbp"]["run_quality"]).
     on_play: optional callback(games, offence, row, gain, scored, is_run, yardline, half) called
       for every batch of scrimmage plays, for attaching player statistics. `row` indexes
       the real plays in model.plays; `yardline` is where the snap was; `half` is 1, 2 or 3 (overtime).
@@ -174,7 +177,7 @@ def simulate_game(model: M.GameModel, n_sims: int, rng: np.random.Generator,
             is_run = (rng.random(len(k)) >= 1.0 / (1.0 + np.exp(-logit))).astype(np.int64)
             bucket = M.bucket_index(is_run, down[k], togo[k], yl[k])
             row = plays.draw(bucket, rng.random(len(k)))
-            q = quality[t, k]
+            q = quality[t, k] * np.where(is_run == 1, run_quality, 1.0)
             if (q != 0).any():      # a second look, kept when it is better (or worse) for the offence
                 other = plays.draw(bucket, rng.random(len(k)))
                 value = lambda r: col["gain"][r] + 25.0 * col["td"][r] - 20.0 * (col["turnover"][r] > 0)

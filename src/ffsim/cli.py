@@ -461,14 +461,20 @@ def cmd_pbp_check(args) -> None:
     print("\nGame flow:\n")
     print(checks.to_string())
     try:
-        sd = float(load_settings(None).get("pbp", {}).get("game_plan_sd", 0.0))
-        swings = validate.around_the_line(plays, model, sd, seed=args.seed)
+        pbp = load_settings(None).get("pbp", {})
+        sd, run_quality = float(pbp.get("game_plan_sd", 0.0)), float(pbp.get("run_quality", 1.0))
+        swings = validate.around_the_line(plays, model, sd, seed=args.seed, run_quality=run_quality)
+        by_points = validate.by_expected_points(plays, model, run_quality, seed=args.seed)
     except ValueError as error:
-        print(f"\nSkipping the check against betting lines: {error}.")
+        print(f"\nSkipping the checks against betting lines: {error}.")
         return
     print(f"\nHow much games vary around the betting line, with each real game replayed 30 times "
           f"(game-plan variation {sd:g}):\n")
     print(swings.to_string())
+    print(f"\nRushing and passing by the points the betting line expected of each team, each real game "
+          f"replayed 10 times (run quality {run_quality:g}):\n")
+    with pd.option_context("display.width", 250, "display.max_columns", None):
+        print(by_points.to_string())
 
 
 def cmd_field(args) -> None:

@@ -145,6 +145,7 @@ class Matchup:
         # Chance that a running back, receiver or tight end leaves a game partway through
         # (injury or benching); his later targets and carries go to teammates.
         self.exit_rate = {"RB": 0.0, "WR": 0.0, "TE": 0.0}
+        self.run_quality = 1.0                   # how strongly quality applies to designed runs (see simulate_game)
 
     def _shares(self):
         """Cumulative share tables: who is targeted (by side and depth), who carries (by side and zone)."""
@@ -237,7 +238,7 @@ class Matchup:
         lean = np.repeat(np.asarray(self.pass_shift, dtype=float)[:, None], n_sims, axis=1)
         if self.game_plan_sd > 0:      # each team's plan for the day: more through the air, or more on the ground
             lean = lean + self.game_plan_sd * rng.standard_normal((2, n_sims))
-        box = simulate_game(model, n_sims, rng, tuple(self.quality), lean, on_play)
+        box = simulate_game(model, n_sims, rng, tuple(self.quality), lean, on_play, run_quality=self.run_quality)
         points = draftkings_points(stats)
         for side in (0, 1):
             for i in np.flatnonzero(self.is_dst & (self.side == side)):

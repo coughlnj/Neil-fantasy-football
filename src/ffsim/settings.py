@@ -136,7 +136,13 @@ DEFAULTS: dict = {
     # through (injury or benching), his later targets and carries going to teammates. Fitted
     # so starters vanish after halftime, fall below a fifth of their usage after halftime,
     # and score near zero about as often as in real games (2024 to mid-2026).
-    "pbp": {"game_plan_sd": 0.25, "exit_rate": {"RB": 0.13, "WR": 0.11, "TE": 0.09}},
+    # run_quality: how strongly an offence's quality (its edge, fitted to its projected points)
+    # applies to designed runs relative to dropbacks. In real games (2024 to mid-2026) a team
+    # expected to score 28.5 gains 0.65 more yards per carry than one expected to score 16.5,
+    # but 2.1 more per pass. Applied fully, the simulator gave 1.08 more per carry, so strong
+    # offences ran for far too much (Dallas averaged 5.5 a carry on 22 November). 0.6 matches
+    # the real slope; see the "by expected points" table in `ffsim pbp-check`.
+    "pbp": {"game_plan_sd": 0.25, "exit_rate": {"RB": 0.13, "WR": 0.11, "TE": 0.09}, "run_quality": 0.6},
 }
 
 

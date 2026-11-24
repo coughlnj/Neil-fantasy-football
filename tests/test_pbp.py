@@ -123,6 +123,15 @@ def test_better_offence_scores_more_and_a_trailing_team_passes_more(model):
     assert lean["dropbacks"][0].mean() > lean["dropbacks"][1].mean() + 8
 
 
+def test_run_quality_tempers_rushing_for_strong_offences(model):
+    full = simulate_game(model, 6000, np.random.default_rng(4), quality=(0.6, 0.0))
+    tempered = simulate_game(model, 6000, np.random.default_rng(4), quality=(0.6, 0.0), run_quality=0.3)
+    per_carry = lambda s: s["rush_yards"][0].sum() / s["rush_att"][0].sum()
+    per_pass = lambda s: s["pass_yards"][0].sum() / s["pass_att"][0].sum()
+    assert per_carry(tempered) < per_carry(full) - 0.2
+    assert per_pass(tempered) == pytest.approx(per_pass(full), rel=0.05)        # passing keeps its full edge
+
+
 def test_each_simulated_game_can_have_its_own_plan(model):
     n = 8000
     rng = np.random.default_rng(4)
@@ -267,10 +276,25 @@ def test_swings_around_the_betting_line_are_the_right_size():
 
     plays = load_pbp(REAL_DATA)
     sd = load_settings()["pbp"]["game_plan_sd"]
-    table = around_the_line(plays, M.fit_game_model(plays), sd, repeats=20, seed=2)
+    table = around_the_line(plays, M.fit_game_model(plays), sd, repeats=20, seed=2, run_quality=load_settings()["pbp"]["run_quality"])
     real, sim = table["real"], table["sim, with game plan"]
     assert sim["Share of plays that are dropbacks: spread (sd)"] == pytest.approx(real["Share of plays that are dropbacks: spread (sd)"], abs=0.006)
     for row in ("Points: spread (sd)", "Game total points: spread around the line (sd)", "Winning margin: spread around the line (sd)"):
         assert sim[row] == pytest.approx(real[row], rel=0.05), row
     for row in ("Dropbacks: spread (sd)", "Rushes: spread (sd)", "Passing yards: spread (sd)", "Rushing yards: spread (sd)"):
         assert sim[row] <= 1.03 * real[row], row            # never wider than real
+
+
+@pytest.mark.skipif(not os.path.isdir(REAL_DATA), reason="real play-by-play data not downloaded")
+def test_rushing_rises_with_expected_points_like_real_games():
+    """Teams expected to score more gain a lot more per pass but only a little more per carry."""
+    from ffsim.pbp.data import load_pbp
+    from ffsim.pbp.validate import by_expected_points
+
+    plays = load_pbp(REAL_DATA)
+    table = by_expected_points(plays, M.fit_game_model(plays), load_settings()["pbp"]["run_quality"], repeats=5, seed=3)
+    busy = table[table[("team-games", "real")] >= 100]
+    ypc = busy["yards per carry"]
+    assert ((ypc["sim"] - ypc["real"]).abs() < 0.25).all()
+    rise = lambda side: ypc[side].iloc[-1] - ypc[side].iloc[0]
+    assert rise("sim") == pytest.approx(rise("real"), abs=0.25)
