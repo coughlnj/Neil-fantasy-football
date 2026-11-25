@@ -1,0 +1,148 @@
+{
+ "name": "NFL Thanksgiving $5 ($1M to 1st, 594,500 entries, 150-max)",
+ "entry_fee": 5,
+ "entries": 594500,
+ "max_entries": 150,
+ "payouts": [
+  {
+   "from": 1,
+   "to": 1,
+   "prize": 1000000
+  },
+  {
+   "from": 2,
+   "to": 2,
+   "prize": 100000
+  },
+  {
+   "from": 3,
+   "to": 3,
+   "prize": 50000
+  },
+  {
+   "from": 4,
+   "to": 4,
+   "prize": 25000
+  },
+  {
+   "from": 5,
+   "to": 5,
+   "prize": 20000
+  },
+  {
+   "from": 6,
+   "to": 6,
+   "prize": 15000
+  },
+  {
+   "from": 7,
+   "to": 8,
+   "prize": 10000
+  },
+  {
+   "from": 9,
+   "to": 10,
+   "prize": 7500
+  },
+  {
+   "from": 11,
+   "to": 12,
+   "prize": 5000
+  },
+  {
+   "from": 13,
+   "to": 15,
+   "prize": 3000
+  },
+  {
+   "from": 16,
+   "to": 20,
+   "prize": 2000
+  },
+  {
+   "from": 21,
+   "to": 25,
+   "prize": 1500
+  },
+  {
+   "from": 26,
+   "to": 30,
+   "prize": 1000
+  },
+  {
+   "from": 31,
+   "to": 40,
+   "prize": 750
+  },
+  {
+   "from": 41,
+   "to": 50,
+   "prize": 500
+  },
+  {
+   "from": 51,
+   "to": 75,
+   "prize": 300
+  },
+  {
+   "from": 76,
+   "to": 100,
+   "prize": 200
+  },
+  {
+   "from": 101,
+   "to": 150,
+   "prize": 150
+  },
+  {
+   "from": 151,
+   "to": 200,
+   "prize": 100
+  },
+  {
+   "from": 201,
+   "to": 300,
+   "prize": 75
+  },
+  {
+   "from": 301,
+   "to": 500,
+   "prize": 50
+  },
+  {
+   "from": 501,
+   "to": 1000,
+   "prize": 40
+  },
+  {
+   "from": 1001,
+   "to": 2000,
+   "prize": 30
+  },
+  {
+   "from": 2001,
+   "to": 4000,
+   "prize": 25
+  },
+  {
+   "from": 4001,
+   "to": 7000,
+   "prize": 20
+  },
+  {
+   "from": 7001,
+   "to": 15000,
+   "prize": 15
+  },
+  {
+   "from": 15001,
+   "to": 40000,
+   "prize": 10
+  },
+  {
+   "from": 40001,
+   "to": 123800,
+   "prize": 7.5
+  }
+ ]
+}
