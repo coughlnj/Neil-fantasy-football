@@ -815,6 +815,28 @@ def test_short_portfolio_is_topped_up(tmp_path, capsys):
     assert picked["adj_roi_pct"].mean() >= graded["adj_roi_pct"].quantile(0.5)
 
 
+def test_heavily_shared_lineups_can_be_left_out(tmp_path, capsys):
+    from ffsim.cli import main
+    from ffsim.sample import sample_slate
+
+    path = tmp_path / "slate.csv"
+    sample_slate(3, seed=5).to_csv(path, index=False)              # a short slate, so the field repeats itself
+    quick = tmp_path / "quick.json"
+    quick.write_text(json.dumps({"field": {**QUICK_FIELD, "groups": load_settings()["field"]["groups"], "ownership_scenarios": 1}}))
+    out = tmp_path / "out"
+    main(["simulate", str(path), "--sims", "2000", "--seed", "1", "--out", str(out)])
+    common = ["lineups", str(out / "simulation.npz"), "--config", str(quick), "--contest", "contests/sample_small_gpp.json",
+              "--sampled", "3000", "--candidates", "300", "--optimizer-lineups", "30", "--finalists", "200", "--portfolio", "10",
+              "--field", "3000", "--show", "0", "--seed", "1", "--out", str(tmp_path / "lineups.csv")]
+    main(common + ["--portfolio-out", str(tmp_path / "free.csv")])
+    free = pd.read_csv(tmp_path / "free.csv")
+    cap = free["expected_dupes"].max() / 2
+    assert cap > 0                                                   # without the cap some picks are shared
+    main(common + ["--portfolio-out", str(tmp_path / "capped.csv"), "--max-dupes", str(cap)])
+    capped = pd.read_csv(tmp_path / "capped.csv")
+    assert len(capped) > 0 and (capped["expected_dupes"] <= cap).all()
+
+
 def test_a_player_can_be_left_out(tmp_path, capsys):
     from ffsim.cli import main
     from ffsim.sample import sample_slate

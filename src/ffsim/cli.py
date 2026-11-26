@@ -132,6 +132,8 @@ def cmd_lineups(args) -> None:
             finalists = np.concatenate([finalists, free[: max(args.finalists, args.portfolio)]])
         # Keep every lineup shortlisted in earlier rounds, so a round can only add options.
         finalists = np.unique(np.concatenate([shortlisted, finalists]))
+        if args.max_dupes is not None:      # heavily shared lineups split any big prize many ways
+            finalists = finalists[results["expected_dupes"].to_numpy()[finalists] <= args.max_dupes]
         finalists = finalists[np.argsort(-adjusted[finalists])]
         shortlisted = finalists
         _, payouts = evaluate(candidates[finalists], graders, grade, contest, keep_payouts=True)
@@ -593,7 +595,7 @@ def cmd_week(args) -> None:
             build = ["lineups", sim, "--contest", args.contest, "--show", "0", "--out", os.path.join(folder, "lineups.csv"),
                      "--portfolio-out", os.path.join(folder, "portfolio.csv"), "--upload-out", os.path.join(folder, "dk_upload.csv"),
                      "--max-exposure", str(args.max_exposure), "--max-overlap", str(args.max_overlap), "--portfolio", str(args.portfolio)]
-            for flag in ("sampled", "candidates", "optimizer_lineups", "finalists", "field", "bankroll", "contest_id"):
+            for flag in ("sampled", "candidates", "optimizer_lineups", "finalists", "field", "bankroll", "contest_id", "max_dupes"):
                 if getattr(args, flag) is not None:
                     build += ["--" + flag.replace("_", "-"), str(getattr(args, flag))]
             for item in args.exposure or []:
@@ -677,6 +679,8 @@ def main(argv=None) -> None:
     p.add_argument("--sampled", type=int, default=200000, help="lineups to sample and screen")
     p.add_argument("--optimizer-lineups", type=int, default=600, help="lineups to build with the optimizer")
     p.add_argument("--finalists", type=int, default=2000, help="top lineups the portfolio is chosen from")
+    p.add_argument("--max-dupes", type=float,
+                   help="leave out lineups expected to be entered more than this many times by opponents")
     p.add_argument("--field", type=int, help="opponent lineups to sample (default: the whole contest)")
     p.add_argument("--portfolio", type=int, default=150, help="lineups to select")
     p.add_argument("--bankroll", type=float,
@@ -781,6 +785,7 @@ def main(argv=None) -> None:
     p.add_argument("--out-dir", default="out/week")
     for flag in ("sampled", "candidates", "optimizer-lineups", "finalists", "field"):
         p.add_argument("--" + flag, type=int, help="as for 'ffsim lineups'")
+    p.add_argument("--max-dupes", type=float, help="as for 'ffsim lineups'")
     p.add_argument("--config")
     p.add_argument("--seed", type=int)
     p.set_defaults(func=cmd_week)
